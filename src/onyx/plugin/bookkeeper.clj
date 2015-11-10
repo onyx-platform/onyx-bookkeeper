@@ -91,8 +91,9 @@
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
                                (zk/ledgers-path (:onyx/id peer-opts)))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
-        zookeeper
-        client (obk/bookkeeper zookeeper-addr ledgers-root-path 60000 30000)
+        zookeeper-timeout 60000
+        bookkeeper-throttle 30000
+        client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         ledger-id (:bookkeeper/ledger-id task-map)
         password (or (:bookkeeper/password task-map) (throw (Exception. ":bookkeeper/password must be supplied")))
         ledger-handle (obk/open-ledger client ledger-id obk/digest-type password)
