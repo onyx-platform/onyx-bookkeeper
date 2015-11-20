@@ -57,11 +57,13 @@
     (throw (Exception. "Restarted task, however it was already completed for this job.
                        This is currently unhandled."))))
 
-(defn read-ledger-entries [ledger-handle]
+(defn read-ledger-entries [ledger-handle last-acked]
+  (info "Starting BooKeeper input ledger reader at:" last-acked)
   (let [last-confirmed (.getLastAddConfirmed ledger-handle)]
-    (if-not (neg? last-confirmed)
+    (if-not (and (neg? last-confirmed)
+                 (not= last-confirmed last-acked))
       (loop [results [] 
-             entries (.readEntries ledger-handle 0 last-confirmed)
+             entries (.readEntries ledger-handle (inc last-acked) last-confirmed)
              ledger-entry ^LedgerEntry (.nextElement entries)] 
         (let [segment {:entry-id (.getEntryId ledger-entry) 
                        :value (nippy/decompress (.getEntry ledger-entry))}
@@ -99,11 +101,9 @@
         ledger-handle (obk/open-ledger client ledger-id obk/digest-type password)
         producer-ch (thread
                       (try
-                        (let [exit (loop [ledger-index 0
-                                          ;ledger-index (inc (:largest checkpointed)) backoff initial-backoff
-                                          ]
+                        (let [exit (loop [last-acked (:largest checkpointed)]
                                      (if (first (alts!! [shutdown-ch] :default true))
-                                       (doseq [entry (read-ledger-entries ledger-handle)]
+                                       (doseq [entry (read-ledger-entries ledger-handle last-acked)]
                                          (>!! read-ch (t/input (java.util.UUID/randomUUID) entry)))
                                        :shutdown))]
                           (if-not (= exit :shutdown)
@@ -147,7 +147,6 @@
                        (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
       (doseq [m batch]
         (let [message (:message m)]
-          (info "message is " message)
           (when-not (= message :done)
             (swap! top-index max (:entry-id message))
             (swap! pending-indexes conj (:entry-id message))))
@@ -155,7 +154,8 @@
       (when (and (all-done? (vals @pending-messages))
                  (all-done? batch)
                  (or (not (empty? @pending-messages))
-                     (not (empty? batch))))
+                     (not (empty? batch)))
+                 (zero? (count (.buf read-ch))))
         (when-not (:checkpoint/key (:onyx.core/task-map event))
           (>!! commit-ch {:status :complete}))
         (reset! drained? true))
@@ -164,12 +164,12 @@
   p-ext/PipelineInput
 
   (ack-segment [_ _ segment-id]
-    (let [tx (:t (:message (@pending-messages segment-id)))]
-      (swap! pending-indexes disj tx)
+    (let [entry-id (:entry-id (:message (@pending-messages segment-id)))]
       ;; if this transaction is now the lowest unacked tx, then we can update the checkpoint
       (let [new-top-acked (highest-acked-index @top-acked-index @top-index @pending-indexes)]
         (>!! commit-ch {:largest new-top-acked :status :incomplete})
         (reset! top-acked-index new-top-acked))
+      (swap! pending-indexes disj entry-id)
       (swap! pending-messages dissoc segment-id)))
 
   (retry-segment

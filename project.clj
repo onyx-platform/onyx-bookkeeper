@@ -1,4 +1,4 @@
-(defproject org.onyxplatform/onyx-bookkeeper "0.8.0-SNAPSHOT"
+(defproject org.onyxplatform/onyx-bookkeeper "0.8.1.0-SNAPSHOT"
   :description "Onyx plugin for BookKeeper"
   :url "https://github.com/onyx-platform/onyx-bookkeeper"
   :license {:name "Eclipse Public License"
@@ -13,7 +13,7 @@
                              :sign-releases false}}
   :dependencies [[org.clojure/clojure "1.7.0"]
                  ^{:voom {:repo "git@github.com:onyx-platform/onyx.git" :branch "master"}}
-                 [org.onyxplatform/onyx "0.8.0-alpha1"]]
+                 [org.onyxplatform/onyx "0.8.1-SNAPSHOT"]]
   :profiles {:dev {:dependencies [[midje "1.7.0"]
 				  [org.apache.bookkeeper/bookkeeper-server "4.3.1" 
 				   :exclusions [org.slf4j/slf4j-log4j12]]]

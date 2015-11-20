@@ -7,7 +7,7 @@
             [onyx.state.log.bookkeeper :as obk]
             [onyx.compression.nippy :as nippy]
             [onyx.test-helper :refer [with-test-env]]
-            [midje.sweet :refer :all])
+            [clojure.test :refer :all])
   (:import [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BookKeeper$DigestType AsyncCallback$AddCallback]))
 
 (def out-chan (atom nil))
@@ -18,8 +18,22 @@
 (def persist-calls
   {:lifecycle/before-task-start inject-persist-ch})
 
-(let [_ (reset! out-chan (chan 1000))
-      id "ONYXID"
+(defn restartable? [e]
+  true)
+
+(def batch-num (atom 0))
+
+(def read-ledgers-crash
+  {:lifecycle/before-batch (fn [event lifecycle]
+                             ; give the peer a bit of time to write
+                             ;; the chunks out and ack the batches
+                             (Thread/sleep 3000) 
+                             (when (= 2 (swap! batch-num inc))
+                               (throw (ex-info "Restartable" {:restartable? true}))))})
+
+(deftest input-plugin
+  (let [_ (reset! out-chan (chan 1000))
+      id (java.util.UUID/randomUUID)
       zk-addr "127.0.0.1:2188"
       env-config {:zookeeper/address zk-addr
                   :zookeeper/server? true
@@ -34,62 +48,60 @@
                    :onyx.messaging/bind-addr "localhost"
                    :onyx.messaging/backpressure-strategy :high-restart-latency
                    :onyx/id id}
-      ledgers-root-path (zk/ledgers-path id)
-      client (obk/bookkeeper zk-addr ledgers-root-path 60000 30000)
-      ledger-handle (obk/new-ledger client env-config)
-      
-      ;; add data to ledger
-      n-entries 20
-      _ (mapv (fn [v]
-                (.addEntry ledger-handle (nippy/compress {:value v})))
-              (range n-entries))
-      _ (.close ledger-handle)
-
-      batch-size 20
-      workflow [[:read-ledgers :persist]]
-      catalog [{:onyx/name :read-ledgers
-                :onyx/plugin :onyx.plugin.bookkeeper/read-ledgers
-                :onyx/type :input
-                :onyx/medium :bookkeeper
-                :bookkeeper/zookeeper-addr zk-addr
-                :bookkeeper/zookeeper-ledgers-root-path ledgers-root-path
-                :bookkeeper/ledger-id (.getId ledger-handle)
-                ;:checkpoint/key "global-checkpoint-key"
-                ;:checkpoint/force-reset? true
-                :bookkeeper/password (.getBytes "INSECUREDEFAULTPASSWORD")
-                :onyx/max-peers 1
-                ;:bookkeeper/log-end-tx 1002
-                :onyx/batch-size batch-size
-                :onyx/doc "Reads a sequence of datoms from the d/tx-range API"}
-
-               {:onyx/name :persist
-                :onyx/plugin :onyx.plugin.core-async/output
-                :onyx/type :output
-                :onyx/medium :core.async
-                :onyx/batch-size 20
-                :onyx/max-peers 1
-                :onyx/doc "Writes segments to a core.async channel"}]
-      lifecycles [{:lifecycle/task :read-ledgers
-                   :lifecycle/calls :onyx.plugin.bookkeeper/read-ledgers-calls}
-                  {:lifecycle/task :persist
-                   :lifecycle/calls ::persist-calls}
-                  {:lifecycle/task :persist
-                   :lifecycle/calls :onyx.plugin.core-async/writer-calls}]]
-
+      batch-size 20]
   (with-test-env [env [3 env-config peer-config]]
-    (println "started env " env)
-    #_(let [job-id (:job-id (onyx.api/submit-job
+    (let [ledgers-root-path (zk/ledgers-path id)
+          client (obk/bookkeeper zk-addr ledgers-root-path 60000 30000)
+          ledger-handle (obk/new-ledger client env-config)
+          workflow [[:read-ledgers :persist]]
+          catalog [{:onyx/name :read-ledgers
+                    :onyx/plugin :onyx.plugin.bookkeeper/read-ledgers
+                    :onyx/type :input
+                    :onyx/medium :bookkeeper
+                    :bookkeeper/zookeeper-addr zk-addr
+                    :bookkeeper/zookeeper-ledgers-root-path ledgers-root-path
+                    :bookkeeper/ledger-id (.getId ledger-handle)
+                    ;:checkpoint/key "global-checkpoint-key"
+                    ;:checkpoint/force-reset? true
+                    :bookkeeper/password (.getBytes "INSECUREDEFAULTPASSWORD")
+                    :onyx/restart-pred-fn ::restartable?
+                    :onyx/max-peers 1
+                    ;:bookkeeper/log-end-tx 1002
+                    :onyx/batch-size batch-size
+                    :onyx/doc "Reads a sequence of datoms from the d/tx-range API"}
+
+                   {:onyx/name :persist
+                    :onyx/plugin :onyx.plugin.core-async/output
+                    :onyx/type :output
+                    :onyx/medium :core.async
+                    :onyx/batch-size 20
+                    :onyx/max-peers 1
+                    :onyx/doc "Writes segments to a core.async channel"}]
+          lifecycles [{:lifecycle/task :read-ledgers
+                       :lifecycle/calls :onyx.plugin.bookkeeper/read-ledgers-calls}
+                      {:lifecycle/task :read-ledgers
+                       :lifecycle/calls ::read-ledgers-crash}
+                      {:lifecycle/task :persist
+                       :lifecycle/calls ::persist-calls}
+                      {:lifecycle/task :persist
+                       :lifecycle/calls :onyx.plugin.core-async/writer-calls}]
+          ;; add data to ledger
+          n-entries 500
+          _ (mapv (fn [v]
+                    (.addEntry ledger-handle (nippy/compress {:value v})))
+                  (range n-entries))
+          _ (.close ledger-handle)
+          job-id (:job-id (onyx.api/submit-job
                             peer-config
                             {:catalog catalog :workflow workflow :lifecycles lifecycles
                              :task-scheduler :onyx.task-scheduler/balanced}))
-          results [] ;(take-segments! @out-chan)
-
-          ;_ (onyx.api/await-job-completion peer-config job-id)
-          ]
-
-
-      (fact (mapv :value (butlast results))
-            =>
-            (map (fn [v]
-                   {:value v})
-                 (range n-entries)))))) 
+          results (take-segments! @out-chan)]
+      (println "read results " (map :value results) "  synthesized"
+            (mapv (fn [v]
+                    {:value v})
+                  (range n-entries))
+            )
+      (is (= (map (fn [v]
+                    {:value v})
+                  (range n-entries))
+             (sort-by :value (map :value (butlast results))))))))) 
