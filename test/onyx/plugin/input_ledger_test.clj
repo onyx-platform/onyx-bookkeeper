@@ -27,8 +27,8 @@
   {:lifecycle/before-batch (fn [event lifecycle]
                              ; give the peer a bit of time to write
                              ;; the chunks out and ack the batches
-                             (Thread/sleep 3000) 
                              (when (= 2 (swap! batch-num inc))
+                               (Thread/sleep 3000) 
                                (throw (ex-info "Restartable" {:restartable? true}))))})
 
 (deftest input-plugin
@@ -96,11 +96,6 @@
                             {:catalog catalog :workflow workflow :lifecycles lifecycles
                              :task-scheduler :onyx.task-scheduler/balanced}))
           results (take-segments! @out-chan)]
-      (println "read results " (map :value results) "  synthesized"
-            (mapv (fn [v]
-                    {:value v})
-                  (range n-entries))
-            )
       (is (= (map (fn [v]
                     {:value v})
                   (range n-entries))

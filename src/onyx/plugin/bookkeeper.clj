@@ -57,27 +57,27 @@
     (throw (Exception. "Restarted task, however it was already completed for this job.
                        This is currently unhandled."))))
 
-(defn read-ledger-entries [ledger-handle last-acked]
-  (info "Starting BooKeeper input ledger reader at:" last-acked)
-  (let [last-confirmed (.getLastAddConfirmed ledger-handle)]
+(defn read-ledger-entries [ledger-handle last-acked read-ch]
+  (info "Starting BooKeeper input ledger reader at:" (inc last-acked))
+  (let [ledger-id (.getId ledger-handle)
+        last-confirmed (.getLastAddConfirmed ledger-handle)]
+    ;; Naive, synchronous non-chunked approach that reads everything
     (if-not (and (neg? last-confirmed)
                  (not= last-confirmed last-acked))
-      (loop [results [] 
-             entries (.readEntries ledger-handle (inc last-acked) last-confirmed)
-             ledger-entry ^LedgerEntry (.nextElement entries)] 
-        (let [segment {:entry-id (.getEntryId ledger-entry) 
-                       :value (nippy/decompress (.getEntry ledger-entry))}
-              new-results (conj results segment)] 
+      (loop [entries (.readEntries ledger-handle (inc last-acked) last-confirmed)
+             ledger-entry (.nextElement entries)] 
+        (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
+                       :ledger-id ledger-id
+                       :value (nippy/decompress (.getEntry ^LedgerEntry ledger-entry))}] 
+          (>!! read-ch (t/input (java.util.UUID/randomUUID) segment))
           (if (.hasMoreElements entries)
-            (recur new-results entries (.nextElement entries))
-            new-results)))
-      [])))
+            (recur entries 
+                   (.nextElement entries))))))))
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
-  ;;; RENAME START-ID to START INDEX, ENTRY?
   (let [start-id (:bookkeeper/ledger-start-id task-map)
         max-id (:bookkeeper/ledger-end-id task-map)
         {:keys [read-ch shutdown-ch commit-ch]} pipeline
@@ -102,10 +102,9 @@
         producer-ch (thread
                       (try
                         (let [exit (loop [last-acked (:largest checkpointed)]
-                                     (if (first (alts!! [shutdown-ch] :default true))
-                                       (doseq [entry (read-ledger-entries ledger-handle last-acked)]
-                                         (>!! read-ch (t/input (java.util.UUID/randomUUID) entry)))
-                                       :shutdown))]
+                                     ;if (first (alts!! [shutdown-ch] :default true))
+                                     (read-ledger-entries ledger-handle last-acked read-ch)
+                                     :finished)]
                           (if-not (= exit :shutdown)
                             (>!! read-ch (t/input (java.util.UUID/randomUUID) :done))))
                         (catch Exception e
@@ -138,13 +137,13 @@
 
   (read-batch
     [_ event]
-    (let [pending (count (keys @pending-messages))
+    (let [pending (count @pending-messages)
           max-segments (min (- max-pending pending) batch-size)
           timeout-ch (timeout batch-timeout)
           batch (if (zero? max-segments) 
-                  (<!! timeout-ch)
-                  (->> (range max-segments)
-                       (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
+                      (<!! timeout-ch)
+                      (->> (range max-segments)
+                           (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
       (doseq [m batch]
         (let [message (:message m)]
           (when-not (= message :done)
@@ -165,11 +164,11 @@
 
   (ack-segment [_ _ segment-id]
     (let [entry-id (:entry-id (:message (@pending-messages segment-id)))]
+      (swap! pending-indexes disj entry-id)
       ;; if this transaction is now the lowest unacked tx, then we can update the checkpoint
       (let [new-top-acked (highest-acked-index @top-acked-index @top-index @pending-indexes)]
         (>!! commit-ch {:largest new-top-acked :status :incomplete})
         (reset! top-acked-index new-top-acked))
-      (swap! pending-indexes disj entry-id)
       (swap! pending-messages dissoc segment-id)))
 
   (retry-segment
