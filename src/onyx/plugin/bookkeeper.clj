@@ -68,14 +68,15 @@
         (recur entries 
                (.nextElement entries))))))
 
+(def read-chunk-size 100)
+
 (defn read-ledger-entries! [^LedgerHandle ledger-handle last-acked max-id read-ch]
   (info "Starting BooKeeper input ledger reader at:" (inc last-acked))
-  (let [ledger-id (.getId ledger-handle)
-        chunk-size 1]
+  (let [ledger-id (.getId ledger-handle)]
     (loop [;; only need to read this once unless recover mode
            last-confirmed (.getLastAddConfirmed ledger-handle) 
            start (inc last-acked)
-           end (min last-confirmed max-id (+ start chunk-size))]
+           end (min last-confirmed max-id (+ start read-chunk-size))]
       (when (and (not (neg? last-confirmed)) 
                  (< last-acked last-confirmed)
                  (< start last-confirmed))
@@ -83,7 +84,7 @@
         (let [last-confirmed (.getLastAddConfirmed ledger-handle)]
           (recur last-confirmed
                  (inc end)
-                 (min last-confirmed max-id (+ (inc end) chunk-size))))))))
+                 (min last-confirmed max-id (+ (inc end) read-chunk-size))))))))
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
@@ -92,7 +93,7 @@
   (let [start-id (if-let [start (:bookkeeper/ledger-start-id task-map)]
                    (dec start) 
                    -1) 
-        max-id (:bookkeeper/ledger-end-id task-map)
+        max-id (or (:bookkeeper/ledger-end-id task-map) Double/POSITIVE_INFINITY)
         {:keys [read-ch shutdown-ch commit-ch]} pipeline
         checkpoint-key (or (:checkpoint/key task-map) task-id)
         _ (set-starting-offset! log task-map checkpoint-key start-id)
