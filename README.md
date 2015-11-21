@@ -30,8 +30,8 @@ Catalog entry:
  :onyx/type :input
  :onyx/medium :bookkeeper
  :bookkeeper/uri db-uri
- :bookkeeper/log-start-tx <<OPTIONAL_TX_START_INDEX>>
- :bookkeeper/log-end-tx <<OPTIONAL_TX_END_INDEX>>
+ :bookkeeper/ledger-start-id <<OPTIONAL_LEDGER_START_INDEX>>
+ :bookkeeper/ledger-end-id <<OPTIONAL_LEDGER_END_INDEX>>
  :checkpoint/force-reset? true
  :onyx/max-peers 1
  :onyx/batch-size batch-size

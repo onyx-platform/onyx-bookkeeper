@@ -29,24 +29,24 @@
   (<!! producer-ch)
   {})
 
-(defn set-starting-offset! [log task-map checkpoint-key start-id]
+(defn set-starting-offset! [log task-map checkpoint-key start]
   (if (:checkpoint/force-reset? task-map)
-    (extensions/force-write-chunk log :chunk {:largest (or start-id -1)
+    (extensions/force-write-chunk log :chunk {:largest start
                                               :status :incomplete}
                                   checkpoint-key)
-    (extensions/write-chunk log :chunk {:largest (or start-id -1)
+    (extensions/write-chunk log :chunk {:largest start
                                         :status :incomplete}
                             checkpoint-key)))
 
 (defn validate-within-supplied-bounds [start-id end-id checkpoint-id]
   (when checkpoint-id
     (when (and start-id (< checkpoint-id start-id))
-      (throw (ex-info "Checkpointed transaction is less than :bookkeeper/log-start-id"
+      (throw (ex-info "Checkpointed transaction is less than :bookkeeper/ledger-start-id"
                       {:bookkeeper/ledger-start-id start-id
                        :bookkeeper/ledger-end-id end-id
                        :checkpointed-id checkpoint-id})))
     (when (and end-id (>= checkpoint-id end-id))
-      (throw (ex-info "Checkpointed transaction is greater than :bookkeeper/log-start-id"
+      (throw (ex-info "Checkpointed transaction is greater than :bookkeeper/ledger-start-id"
                       {:bookkeeper/ledger-start-id start-id
                        :bookkeeper/ledger-end-id end-id
                        :checkpointed-id checkpoint-id})))))
@@ -57,28 +57,41 @@
     (throw (Exception. "Restarted task, however it was already completed for this job.
                        This is currently unhandled."))))
 
-(defn read-ledger-entries [ledger-handle last-acked read-ch]
+(defn read-ledger-chunk! [ledger-handle ledger-id read-ch start end]
+  (loop [entries (.readEntries ledger-handle start end)
+         ledger-entry (.nextElement entries)] 
+    (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
+                   :ledger-id ledger-id
+                   :value (nippy/decompress (.getEntry ^LedgerEntry ledger-entry))}] 
+      (>!! read-ch (t/input (java.util.UUID/randomUUID) segment))
+      (if (.hasMoreElements entries)
+        (recur entries 
+               (.nextElement entries))))))
+
+(defn read-ledger-entries! [^LedgerHandle ledger-handle last-acked max-id read-ch]
   (info "Starting BooKeeper input ledger reader at:" (inc last-acked))
   (let [ledger-id (.getId ledger-handle)
-        last-confirmed (.getLastAddConfirmed ledger-handle)]
-    ;; Naive, synchronous non-chunked approach that reads everything
-    (if-not (and (neg? last-confirmed)
-                 (not= last-confirmed last-acked))
-      (loop [entries (.readEntries ledger-handle (inc last-acked) last-confirmed)
-             ledger-entry (.nextElement entries)] 
-        (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
-                       :ledger-id ledger-id
-                       :value (nippy/decompress (.getEntry ^LedgerEntry ledger-entry))}] 
-          (>!! read-ch (t/input (java.util.UUID/randomUUID) segment))
-          (if (.hasMoreElements entries)
-            (recur entries 
-                   (.nextElement entries))))))))
+        chunk-size 1]
+    (loop [;; only need to read this once unless recover mode
+           last-confirmed (.getLastAddConfirmed ledger-handle) 
+           start (inc last-acked)
+           end (min last-confirmed max-id (+ start chunk-size))]
+      (when (and (not (neg? last-confirmed)) 
+                 (< last-acked last-confirmed)
+                 (< start last-confirmed))
+        (read-ledger-chunk! ledger-handle ledger-id read-ch start end)
+        (let [last-confirmed (.getLastAddConfirmed ledger-handle)]
+          (recur last-confirmed
+                 (inc end)
+                 (min last-confirmed max-id (+ (inc end) chunk-size))))))))
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
-  (let [start-id (:bookkeeper/ledger-start-id task-map)
+  (let [start-id (if-let [start (:bookkeeper/ledger-start-id task-map)]
+                   (dec start) 
+                   -1) 
         max-id (:bookkeeper/ledger-end-id task-map)
         {:keys [read-ch shutdown-ch commit-ch]} pipeline
         checkpoint-key (or (:checkpoint/key task-map) task-id)
@@ -98,12 +111,13 @@
         client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         ledger-id (:bookkeeper/ledger-id task-map)
         password (or (:bookkeeper/password task-map) (throw (Exception. ":bookkeeper/password must be supplied")))
+        ;ledger-handle (obk/open-ledger-no-recovery client ledger-id obk/digest-type password)
         ledger-handle (obk/open-ledger client ledger-id obk/digest-type password)
         producer-ch (thread
                       (try
                         (let [exit (loop [last-acked (:largest checkpointed)]
                                      ;if (first (alts!! [shutdown-ch] :default true))
-                                     (read-ledger-entries ledger-handle last-acked read-ch)
+                                     (read-ledger-entries! ledger-handle last-acked max-id read-ch)
                                      :finished)]
                           (if-not (= exit :shutdown)
                             (>!! read-ch (t/input (java.util.UUID/randomUUID) :done))))

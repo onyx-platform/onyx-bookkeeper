@@ -61,12 +61,13 @@
                     :bookkeeper/zookeeper-addr zk-addr
                     :bookkeeper/zookeeper-ledgers-root-path ledgers-root-path
                     :bookkeeper/ledger-id (.getId ledger-handle)
+                    ;:bookkeeper/ledger-start-id 0
+                    ;:bookkeeper/ledger-end-id 499
                     ;:checkpoint/key "global-checkpoint-key"
                     ;:checkpoint/force-reset? true
                     :bookkeeper/password (.getBytes "INSECUREDEFAULTPASSWORD")
                     :onyx/restart-pred-fn ::restartable?
                     :onyx/max-peers 1
-                    ;:bookkeeper/log-end-tx 1002
                     :onyx/batch-size batch-size
                     :onyx/doc "Reads a sequence of datoms from the d/tx-range API"}
 
