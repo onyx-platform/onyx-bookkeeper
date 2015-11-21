@@ -14,11 +14,7 @@
   :dependencies [[org.clojure/clojure "1.7.0"]
                  ^{:voom {:repo "git@github.com:onyx-platform/onyx.git" :branch "master"}}
                  [org.onyxplatform/onyx "0.8.1-SNAPSHOT"]]
-  :profiles {:dev {:dependencies [[midje "1.7.0"]
-				  [org.apache.bookkeeper/bookkeeper-server "4.3.1" 
-				   :exclusions [org.slf4j/slf4j-log4j12]]]
-                   :plugins [[lein-midje "3.1.3"]
-                             [lein-set-version "0.4.1"]
+  :profiles {:dev {:plugins [[lein-set-version "0.4.1"]
                              [lein-update-dependency "0.1.2"]
                              [lein-pprint "1.1.1"]]}
              :circle-ci {:jvm-opts ["-Xmx4g"]}})
