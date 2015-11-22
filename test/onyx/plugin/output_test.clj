@@ -64,7 +64,7 @@
                   :onyx/type :output
                   :onyx/medium :bookkeeper
                   :bookkeeper/serializer-fn :onyx.compression.nippy/compress
-                  :bookkeeper/password password
+                  :bookkeeper/password-bytes password
                   :bookkeeper/ensemble-size 3
                   :bookkeeper/quorum-size 3
                   :bookkeeper/zookeeper-addr zk-addr
