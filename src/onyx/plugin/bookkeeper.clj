@@ -1,21 +1,50 @@
 (ns onyx.plugin.bookkeeper
   (:require [clojure.core.async :refer [chan >! >!! <!! close! thread timeout alts!! go-loop sliding-buffer]]
+            [schema.core :as s]
+            [onyx.schema :as onyx-schema]
             [onyx.state.log.bookkeeper :as obk]
-            [onyx.compression.nippy :as nippy]
             [onyx.peer.pipeline-extensions :as p-ext]
             [onyx.peer.function :as function]
             [onyx.types :as t]
             [onyx.static.default-vals :refer [defaults]]
             [onyx.log.zookeeper :as zk]
             [onyx.extensions :as extensions]
-            [taoensso.timbre :refer [info debug fatal]])
-  (:import [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BookKeeper$DigestType AsyncCallback$AddCallback]))
+            [onyx.log.commands.peer-replica-view :refer [peer-site]]
+            [onyx.peer.operation :refer [kw->fn]]
+            [onyx.types :refer [dec-count! inc-count!]]
+            [taoensso.timbre :refer [info error debug fatal]])
+  (:import [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BKException$Code
+            BookKeeper$DigestType AsyncCallback$AddCallback]))
+
+(def BookKeeperInput
+  {:bookkeeper/zookeeper-addr s/Str
+   :bookkeeper/digest-type (s/enum :mac :crc32)
+   :bookkeeper/deserializer-fn onyx-schema/NamespacedKeyword
+   (s/optional-key :bookkeeper/ledger-start-id) onyx-schema/SPosInt
+   (s/optional-key :bookkeeper/ledger-end-id) onyx-schema/SPosInt
+   (s/optional-key :bookkeeper/no-recovery?) s/Bool
+   (s/optional-key :bookkeeper/read-max-chunk-size) onyx-schema/PosInt
+   (s/optional-key :bookkeeper/zookeeper-ledgers-root-path) s/Str
+   (s/optional-key :checkpoint/force-reset?) s/Bool
+   ;; need password
+   s/Any s/Any})
+
+(def BookKeeperOutput
+  {:bookkeeper/zookeeper-addr s/Str
+   :bookkeeper/digest-type (s/enum :mac :crc32)
+   :bookkeeper/serializer-fn onyx-schema/NamespacedKeyword
+   :bookkeeper/ensemble-size onyx-schema/SPosInt
+   :bookkeeper/quorum-size onyx-schema/SPosInt
+   s/Any s/Any})
 
 (defn start-commit-loop! [commit-ch log k]
   (go-loop []
            (when-let [content (<!! commit-ch)]
              (extensions/force-write-chunk log :chunk content k)
              (recur))))
+
+(def digest-type {:crc32 BookKeeper$DigestType/CRC32 
+                  :mac BookKeeper$DigestType/MAC})
 
 ;;;;;;;;;;;;;
 ;;;;;;;;;;;;;
@@ -57,12 +86,12 @@
     (throw (Exception. "Restarted task, however it was already completed for this job.
                        This is currently unhandled."))))
 
-(defn read-ledger-chunk! [ledger-handle ledger-id read-ch start end]
+(defn read-ledger-chunk! [ledger-handle deserializer-fn ledger-id read-ch start end]
   (loop [entries (.readEntries ledger-handle start end)
          ledger-entry (.nextElement entries)] 
     (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
                    :ledger-id ledger-id
-                   :value (nippy/decompress (.getEntry ^LedgerEntry ledger-entry))}] 
+                   :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))}] 
       (>!! read-ch (t/input (java.util.UUID/randomUUID) segment))
       (if (.hasMoreElements entries)
         (recur entries 
@@ -70,9 +99,9 @@
 
 (def read-chunk-size 100)
 
-(defn read-ledger-entries! [client ^LedgerHandle ledger-handle read-ch last-acked max-id no-recovery? backoff-period]
-  (info "Starting BooKeeper input ledger reader at:" (inc last-acked))
+(defn read-ledger-entries! [client ^LedgerHandle ledger-handle read-ch deserializer-fn last-acked max-id no-recovery? backoff-period]
   (let [ledger-id (.getId ledger-handle)]
+    (info "Starting BooKeeper input ledger:" ledger-id "reader at:" (inc last-acked))
     (loop [last-confirmed (.getLastAddConfirmed ledger-handle) 
            start (inc last-acked)
            end (min last-confirmed max-id (+ start read-chunk-size))]
@@ -80,7 +109,7 @@
                                  (< last-acked last-confirmed)
                                  (< start last-confirmed))]
         (if not-fully-read?
-          (read-ledger-chunk! ledger-handle ledger-id read-ch start end)
+          (read-ledger-chunk! ledger-handle deserializer-fn ledger-id read-ch start end)
           (Thread/sleep backoff-period))
         (when (or not-fully-read? 
                   (not (.isClosed client ledger-id)))
@@ -94,6 +123,8 @@
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
+
+  (info "in here")
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
   (let [start-id (if-let [start (:bookkeeper/ledger-start-id task-map)]
@@ -119,14 +150,15 @@
         ledger-id (:bookkeeper/ledger-id task-map)
         password (or (:bookkeeper/password task-map) (throw (Exception. ":bookkeeper/password must be supplied")))
         no-recovery? (:bookkeeper/no-recovery? task-map)
+        deserializer-fn (kw->fn (:bookkeeper/deserializer-fn task-map))
+        digest (digest-type (:bookkeeper/digest-type task-map))
         ledger-handle (if no-recovery? 
-                        (obk/open-ledger-no-recovery client ledger-id obk/digest-type password)
-                        (obk/open-ledger client ledger-id obk/digest-type password) )
+                        (obk/open-ledger-no-recovery client ledger-id digest password)
+                        (obk/open-ledger client ledger-id digest password) )
         producer-ch (thread
                       (try
                         (let [exit (loop [last-acked (:largest checkpointed)]
-                                     ;if (first (alts!! [shutdown-ch] :default true))
-                                     (read-ledger-entries! client ledger-handle read-ch last-acked max-id no-recovery? backoff-period)
+                                     (read-ledger-entries! client ledger-handle read-ch deserializer-fn last-acked max-id no-recovery? backoff-period)
                                      :finished)]
                           (if-not (= exit :shutdown)
                             (>!! read-ch (t/input (java.util.UUID/randomUUID) :done))))
@@ -208,19 +240,26 @@
     [_ _]
     @drained?))
 
-(defn read-ledgers [pipeline-data]
-  (let [catalog-entry (:onyx.core/task-map pipeline-data)
-        max-pending (or (:onyx/max-pending catalog-entry) (:onyx/max-pending defaults))
-        batch-size (:onyx/batch-size catalog-entry)
-        batch-timeout (or (:onyx/batch-timeout catalog-entry) (:onyx/batch-timeout defaults))
-        read-ch (chan (or (:bookkeeper/read-buffer catalog-entry) 1000))
+(defn validate-input! [task-map]
+  (try (s/validate BookKeeperInput task-map)
+       (catch Throwable t
+         (error t "Bad validation input task map" task-map)
+         (throw t))))
+
+(defn read-ledgers [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id] :as pipeline-data}]
+  (info "read ledgers")
+  (let [max-pending (or (:onyx/max-pending task-map) (:onyx/max-pending defaults))
+        batch-size (:onyx/batch-size task-map)
+        batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
+        read-ch (chan (or (:bookkeeper/read-buffer task-map) 1000))
         commit-ch (chan (sliding-buffer 1))
         shutdown-ch (chan 1)
         top-id (atom -1)
         top-acked-id (atom -1)
         pending-indexes (atom #{})]
-    (->BookKeeperLogInput (:onyx.core/log pipeline-data)
-                          (:onyx.core/task-id pipeline-data)
+    ;(validate-input! task-map)
+    (->BookKeeperLogInput log
+                          task-id
                           max-pending batch-size batch-timeout
                           (atom {})
                           (atom false)
@@ -239,37 +278,80 @@
 ;;;;;;;;;;;;;
 ;; output plugins
 
-#_(comment 
-  (defn inject-write-tx-resources
-    [{:keys [onyx.core/pipeline]} lifecycle]
-    {:bookkeeper/conn (:conn pipeline)})
-
-(defn inject-write-bulk-tx-resources
+(defn inject-write-ledger-resources
   [{:keys [onyx.core/pipeline]} lifecycle]
-  {:bookkeeper/conn (:conn pipeline)})
+  {:bookkeeper/client (:client pipeline)
+   :bookkeeper/ledger-handle (:ledger-handle pipeline)})
 
-(defrecord BookKeeperWriteDatoms [conn partition]
+(defn close-write-ledger-resources
+  [{:keys [bookkeeper/client bookkeeper/ledger-handle] :as event} lifecycle]
+  (.close client)
+  {})
+
+(def write-ledger-calls
+  {:lifecycle/before-task-start inject-write-ledger-resources
+   :lifecycle/after-task-stop close-write-ledger-resources})
+
+(def HandleWriteCallback
+  (reify AsyncCallback$AddCallback
+    (addComplete [this rc lh entry-id ack]
+      (info "add complete" rc (BKException$Code/OK))
+      (if (= rc (BKException$Code/OK))
+        ((:ack-fn ack))
+        ((:failed! ack) rc)))))
+
+(defrecord BookKeeperWriteLedger [client ledger-handle serializer-fn write-failed-code]
   p-ext/Pipeline
   (read-batch
     [_ event]
     (function/read-batch event))
 
   (write-batch
-    [_ event]
-    (let [messages (mapcat :leaves (:tree (:onyx.core/results event)))]
-      @(d/transact conn
-                   (map (fn [msg] (if (and partition (not (sequential? msg)))
-                                    (assoc msg :db/id (d/tempid partition))
-                                    msg))
-                        (map :message messages)))
-      {:onyx.core/written? true}))
+    [_ {:keys [onyx.core/results onyx.core/peer-replica-view onyx.core/messenger] :as event}]
+    (when @write-failed-code
+      (throw (ex-info "Write to BookKeeper ledger failed." {:ledger-id (.getId ledger-handle)
+                                                            :code @write-failed-code})))
+    (doall
+      (map (fn [[result ack]]
+             (run! (fn [_]
+                     (inc-count! ack))
+                   (:leaves result))
+             (let [ack-fn (fn [] 
+                            (when (dec-count! ack)
+                              (when-let [site (peer-site peer-replica-view (:completion-id ack))]
+                                (extensions/internal-ack-segment messenger event site ack))))
+                   failed-reset-fn (fn [code] (reset! write-failed-code code))
+                   callback-data {:ack-fn ack-fn :failed! failed-reset-fn}] 
+               (run! (fn [leaf]
+                       (info "writing " (:message leaf))
+                       (.asyncAddEntry ^LedgerHandle ledger-handle 
+                                       ^bytes (serializer-fn (:message leaf))
+                                       HandleWriteCallback
+                                       callback-data))
+                     (:leaves result))))
+           (map list (:tree results) (:acks results))))
+    {:onyx.core/written? true})
 
   (seal-resource
     [_ _]
+    (.close ledger-handle)
     {}))
 
-(defn write-datoms [pipeline-data]
-  (let [task-map (:onyx.core/task-map pipeline-data)
-        conn (safe-connect task-map)
-        partition (:bookkeeper/partition task-map)]
-    (->BookKeeperWriteDatoms conn partition))))
+(defn write-ledger [{:keys [onyx.core/task-map onyx.core/peer-opts] :as pipeline-data}]
+  (s/validate BookKeeperOutput task-map)
+  (let [ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
+                              (zk/ledgers-path (:onyx/id peer-opts)))
+        zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
+        zookeeper-timeout 60000
+        bookkeeper-throttle 30000
+        client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
+        serializer-fn (kw->fn (:bookkeeper/serializer-fn task-map))
+        digest (digest-type (:bookkeeper/digest-type task-map))
+        password (or (:bookkeeper/password task-map) 
+                     (throw (Exception. ":bookkeeper/password must be supplied")))
+        ensemble-size (:bookkeeper/ensemble-size task-map)
+        quorum-size (:bookkeeper/quorum-size task-map)
+        ledger-handle (obk/create-ledger client ensemble-size quorum-size digest password)
+        write-failed-code (atom false)]
+    (info "BookKeeper write-ledger: created new ledger:" (.getId ledger-handle))
+    (->BookKeeperWriteLedger client ledger-handle serializer-fn write-failed-code)))

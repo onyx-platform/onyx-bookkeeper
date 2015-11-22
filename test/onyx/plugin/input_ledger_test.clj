@@ -6,6 +6,7 @@
             [onyx.api]
             [onyx.state.log.bookkeeper :as obk]
             [onyx.compression.nippy :as nippy]
+            [taoensso.timbre :refer [info error debug fatal]]
             [onyx.test-helper :refer [with-test-env]]
             [clojure.test :refer :all])
   (:import [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BookKeeper$DigestType AsyncCallback$AddCallback]))
@@ -48,7 +49,7 @@
                    :onyx.messaging/bind-addr "localhost"
                    :onyx.messaging/backpressure-strategy :high-restart-latency
                    :onyx/id id}
-      batch-size 20]
+      batch-size 3]
   (with-test-env [env [3 env-config peer-config]]
     (let [ledgers-root-path (zk/ledgers-path id)
           client (obk/bookkeeper zk-addr ledgers-root-path 60000 30000)
@@ -61,6 +62,8 @@
                     :bookkeeper/zookeeper-addr zk-addr
                     :bookkeeper/zookeeper-ledgers-root-path ledgers-root-path
                     :bookkeeper/ledger-id (.getId ledger-handle)
+                    :bookkeeper/digest-type :mac
+                    :bookkeeper/deserializer-fn :onyx.compression.nippy/decompress
                     ;:bookkeeper/ledger-start-id 0
                     ;:bookkeeper/ledger-end-id 499
                     ;:checkpoint/key "global-checkpoint-key"
@@ -87,11 +90,11 @@
                       {:lifecycle/task :persist
                        :lifecycle/calls :onyx.plugin.core-async/writer-calls}]
           ;; add data to ledger
-          n-entries 500
+          n-entries 29 
           _ (mapv (fn [v]
                     (.addEntry ledger-handle (nippy/compress {:value v})))
                   (range n-entries))
-          ;_ (.close ledger-handle)
+          _ (.close ledger-handle)
           job-id (:job-id (onyx.api/submit-job
                             peer-config
                             {:catalog catalog :workflow workflow :lifecycles lifecycles

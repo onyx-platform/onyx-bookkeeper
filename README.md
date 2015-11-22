@@ -31,6 +31,7 @@ Catalog entry:
  :bookkeeper/ledger-start-id <<OPTIONAL_LEDGER_START_INDEX>>
  :bookkeeper/ledger-end-id <<OPTIONAL_LEDGER_END_INDEX>>
  :bookkeeper/no-recovery? false
+ :bookkeeper/digest-type :mac
  :checkpoint/force-reset? true
  :onyx/max-peers 1
  :onyx/batch-size batch-size
