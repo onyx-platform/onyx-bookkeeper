@@ -70,24 +70,25 @@
 
 (def read-chunk-size 100)
 
-(defn read-ledger-entries! [client ^LedgerHandle ledger-handle last-acked max-id no-recovery? read-ch]
+(defn read-ledger-entries! [client ^LedgerHandle ledger-handle read-ch last-acked max-id no-recovery? backoff-period]
   (info "Starting BooKeeper input ledger reader at:" (inc last-acked))
   (let [ledger-id (.getId ledger-handle)]
-    (loop [;; only need to read this once unless recover mode
-           last-confirmed (.getLastAddConfirmed ledger-handle) 
+    (loop [last-confirmed (.getLastAddConfirmed ledger-handle) 
            start (inc last-acked)
            end (min last-confirmed max-id (+ start read-chunk-size))]
       (let [not-fully-read? (and (not (neg? last-confirmed)) 
                                  (< last-acked last-confirmed)
                                  (< start last-confirmed))]
-        (when not-fully-read?
-          (read-ledger-chunk! ledger-handle ledger-id read-ch start end))
+        (if not-fully-read?
+          (read-ledger-chunk! ledger-handle ledger-id read-ch start end)
+          (Thread/sleep backoff-period))
         (when (or not-fully-read? 
                   (not (.isClosed client ledger-id)))
-          (let [last-confirmed (if no-recovery?
-                                 (.getLastAddConfirmed ledger-handle)
-                                 last-confirmed)]
-            (recur last-confirmed
+          (let [new-last-confirmed (if no-recovery?
+                                     ;; new confirmations may occur in recover mode
+                                     (.getLastAddConfirmed ledger-handle)
+                                     last-confirmed)]
+            (recur new-last-confirmed
                    (inc end)
                    (min last-confirmed max-id (+ (inc end) read-chunk-size)))))))))
 
@@ -107,7 +108,7 @@
         _ (check-completed task-map checkpointed)
         read-size (or (:bookkeeper/read-max-chunk-size task-map) 1000)
         batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
-        initial-backoff 1
+        backoff-period 10
         commit-loop-ch (start-commit-loop! commit-ch log checkpoint-key)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
                                (zk/ledgers-path (:onyx/id peer-opts)))
@@ -125,7 +126,7 @@
                       (try
                         (let [exit (loop [last-acked (:largest checkpointed)]
                                      ;if (first (alts!! [shutdown-ch] :default true))
-                                     (read-ledger-entries! client ledger-handle last-acked max-id no-recovery? read-ch)
+                                     (read-ledger-entries! client ledger-handle read-ch last-acked max-id no-recovery? backoff-period)
                                      :finished)]
                           (if-not (= exit :shutdown)
                             (>!! read-ch (t/input (java.util.UUID/randomUUID) :done))))
