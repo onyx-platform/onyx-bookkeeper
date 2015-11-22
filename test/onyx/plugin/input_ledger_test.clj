@@ -91,7 +91,7 @@
           _ (mapv (fn [v]
                     (.addEntry ledger-handle (nippy/compress {:value v})))
                   (range n-entries))
-          _ (.close ledger-handle)
+          ;_ (.close ledger-handle)
           job-id (:job-id (onyx.api/submit-job
                             peer-config
                             {:catalog catalog :workflow workflow :lifecycles lifecycles

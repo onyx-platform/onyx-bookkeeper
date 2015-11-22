@@ -7,9 +7,8 @@ Onyx plugin providing read and write facilities for BookKeeper ledgers
 In your project file:
 
 ```clojure
-[org.onyxplatform/onyx-bookkeeper "0.8.0-alpha1"]
+[org.onyxplatform/onyx-bookkeeper "0.8.1.0-SNAPSHOT"]
 ```
-
 In your peer boot-up namespace:
 
 ```clojure
@@ -26,27 +25,26 @@ Catalog entry:
 
 ```clojure
 {:onyx/name :read-log
- :onyx/plugin :onyx.plugin.bookkeeper/read-log
+ :onyx/plugin :onyx.plugin.bookkeeper/read-ledgers
  :onyx/type :input
  :onyx/medium :bookkeeper
- :bookkeeper/uri db-uri
  :bookkeeper/ledger-start-id <<OPTIONAL_LEDGER_START_INDEX>>
  :bookkeeper/ledger-end-id <<OPTIONAL_LEDGER_END_INDEX>>
+ :bookkeeper/no-recovery? false
  :checkpoint/force-reset? true
  :onyx/max-peers 1
  :onyx/batch-size batch-size
- :onyx/doc "Reads a sequence of datoms from the d/log API"}
+ :onyx/doc "Reads a sequence of entries from a BookKeeper ledger"}
 ```
 
 Lifecycle entry:
 
 ```clojure
 {:lifecycle/task :read-log
- :lifecycle/calls :onyx.plugin.bookkeeper/read-log-calls}
+ :lifecycle/calls :onyx.plugin.bookkeeper/read-ledgers-calls}
 ```
 
-Task will emit a sentinel `:done` when it reaches the tx log-end-tx
-(exclusive).
+Task will emit a sentinel `:done` when it reaches the ledger-end-id, or the end of a closed ledger.
 
 ###### Attributes
 

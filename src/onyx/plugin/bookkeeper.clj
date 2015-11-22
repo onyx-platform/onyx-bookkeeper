@@ -70,21 +70,26 @@
 
 (def read-chunk-size 100)
 
-(defn read-ledger-entries! [^LedgerHandle ledger-handle last-acked max-id read-ch]
+(defn read-ledger-entries! [client ^LedgerHandle ledger-handle last-acked max-id no-recovery? read-ch]
   (info "Starting BooKeeper input ledger reader at:" (inc last-acked))
   (let [ledger-id (.getId ledger-handle)]
     (loop [;; only need to read this once unless recover mode
            last-confirmed (.getLastAddConfirmed ledger-handle) 
            start (inc last-acked)
            end (min last-confirmed max-id (+ start read-chunk-size))]
-      (when (and (not (neg? last-confirmed)) 
-                 (< last-acked last-confirmed)
-                 (< start last-confirmed))
-        (read-ledger-chunk! ledger-handle ledger-id read-ch start end)
-        (let [last-confirmed (.getLastAddConfirmed ledger-handle)]
-          (recur last-confirmed
-                 (inc end)
-                 (min last-confirmed max-id (+ (inc end) read-chunk-size))))))))
+      (let [not-fully-read? (and (not (neg? last-confirmed)) 
+                                 (< last-acked last-confirmed)
+                                 (< start last-confirmed))]
+        (when not-fully-read?
+          (read-ledger-chunk! ledger-handle ledger-id read-ch start end))
+        (when (or not-fully-read? 
+                  (not (.isClosed client ledger-id)))
+          (let [last-confirmed (if no-recovery?
+                                 (.getLastAddConfirmed ledger-handle)
+                                 last-confirmed)]
+            (recur last-confirmed
+                   (inc end)
+                   (min last-confirmed max-id (+ (inc end) read-chunk-size)))))))))
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
@@ -112,13 +117,15 @@
         client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         ledger-id (:bookkeeper/ledger-id task-map)
         password (or (:bookkeeper/password task-map) (throw (Exception. ":bookkeeper/password must be supplied")))
-        ;ledger-handle (obk/open-ledger-no-recovery client ledger-id obk/digest-type password)
-        ledger-handle (obk/open-ledger client ledger-id obk/digest-type password)
+        no-recovery? (:bookkeeper/no-recovery? task-map)
+        ledger-handle (if no-recovery? 
+                        (obk/open-ledger-no-recovery client ledger-id obk/digest-type password)
+                        (obk/open-ledger client ledger-id obk/digest-type password) )
         producer-ch (thread
                       (try
                         (let [exit (loop [last-acked (:largest checkpointed)]
                                      ;if (first (alts!! [shutdown-ch] :default true))
-                                     (read-ledger-entries! ledger-handle last-acked max-id read-ch)
+                                     (read-ledger-entries! client ledger-handle last-acked max-id no-recovery? read-ch)
                                      :finished)]
                           (if-not (= exit :shutdown)
                             (>!! read-ch (t/input (java.util.UUID/randomUUID) :done))))
