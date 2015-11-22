@@ -68,7 +68,7 @@
                     ;:bookkeeper/ledger-end-id 499
                     ;:checkpoint/key "global-checkpoint-key"
                     ;:checkpoint/force-reset? true
-                    :bookkeeper/password (.getBytes "INSECUREDEFAULTPASSWORD")
+                    :bookkeeper/password-bytes (.getBytes "INSECUREDEFAULTPASSWORD")
                     :onyx/restart-pred-fn ::restartable?
                     :onyx/max-peers 1
                     :onyx/batch-size batch-size

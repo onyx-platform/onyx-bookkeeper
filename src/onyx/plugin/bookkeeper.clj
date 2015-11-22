@@ -37,6 +37,12 @@
    :bookkeeper/quorum-size onyx-schema/SPosInt
    s/Any s/Any})
 
+(defn validate-task-map! [task-map schema]
+  (try (s/validate schema task-map)
+       (catch Throwable t
+         (error t "Failed schema check on task map." task-map schema)
+         (throw t))))
+
 (defn start-commit-loop! [commit-ch log k]
   (go-loop []
            (when-let [content (<!! commit-ch)]
@@ -123,8 +129,6 @@
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
-
-  (info "in here")
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
   (let [start-id (if-let [start (:bookkeeper/ledger-start-id task-map)]
@@ -148,7 +152,7 @@
         bookkeeper-throttle 30000
         client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         ledger-id (:bookkeeper/ledger-id task-map)
-        password (or (:bookkeeper/password task-map) (throw (Exception. ":bookkeeper/password must be supplied")))
+        password (or (:bookkeeper/password-bytes task-map) (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
         no-recovery? (:bookkeeper/no-recovery? task-map)
         deserializer-fn (kw->fn (:bookkeeper/deserializer-fn task-map))
         digest (digest-type (:bookkeeper/digest-type task-map))
@@ -240,14 +244,7 @@
     [_ _]
     @drained?))
 
-(defn validate-input! [task-map]
-  (try (s/validate BookKeeperInput task-map)
-       (catch Throwable t
-         (error t "Bad validation input task map" task-map)
-         (throw t))))
-
 (defn read-ledgers [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id] :as pipeline-data}]
-  (info "read ledgers")
   (let [max-pending (or (:onyx/max-pending task-map) (:onyx/max-pending defaults))
         batch-size (:onyx/batch-size task-map)
         batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
@@ -257,7 +254,7 @@
         top-id (atom -1)
         top-acked-id (atom -1)
         pending-indexes (atom #{})]
-    ;(validate-input! task-map)
+    (validate-task-map! task-map BookKeeperInput)
     (->BookKeeperLogInput log
                           task-id
                           max-pending batch-size batch-timeout
@@ -295,7 +292,6 @@
 (def HandleWriteCallback
   (reify AsyncCallback$AddCallback
     (addComplete [this rc lh entry-id ack]
-      (info "add complete" rc (BKException$Code/OK))
       (if (= rc (BKException$Code/OK))
         ((:ack-fn ack))
         ((:failed! ack) rc)))))
@@ -323,7 +319,6 @@
                    failed-reset-fn (fn [code] (reset! write-failed-code code))
                    callback-data {:ack-fn ack-fn :failed! failed-reset-fn}] 
                (run! (fn [leaf]
-                       (info "writing " (:message leaf))
                        (.asyncAddEntry ^LedgerHandle ledger-handle 
                                        ^bytes (serializer-fn (:message leaf))
                                        HandleWriteCallback
@@ -338,7 +333,7 @@
     {}))
 
 (defn write-ledger [{:keys [onyx.core/task-map onyx.core/peer-opts] :as pipeline-data}]
-  (s/validate BookKeeperOutput task-map)
+  (validate-task-map! task-map BookKeeperOutput)
   (let [ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
                               (zk/ledgers-path (:onyx/id peer-opts)))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
@@ -347,8 +342,8 @@
         client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         serializer-fn (kw->fn (:bookkeeper/serializer-fn task-map))
         digest (digest-type (:bookkeeper/digest-type task-map))
-        password (or (:bookkeeper/password task-map) 
-                     (throw (Exception. ":bookkeeper/password must be supplied")))
+        password (or (:bookkeeper/password-bytes task-map) 
+                     (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
         ensemble-size (:bookkeeper/ensemble-size task-map)
         quorum-size (:bookkeeper/quorum-size task-map)
         ledger-handle (obk/create-ledger client ensemble-size quorum-size digest password)
