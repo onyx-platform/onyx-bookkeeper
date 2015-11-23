@@ -7,13 +7,17 @@
             [onyx.peer.function :as function]
             [onyx.types :as t]
             [onyx.static.default-vals :refer [defaults]]
-            [onyx.log.zookeeper :as zk]
+            [onyx.log.zookeeper :as log-zk]
+            [onyx.log.curator :as zk]
             [onyx.extensions :as extensions]
+            [onyx.monitoring.measurements :refer [measure-latency]]
+            [onyx.compression.nippy :refer [compress decompress]]
             [onyx.log.commands.peer-replica-view :refer [peer-site]]
             [onyx.peer.operation :refer [kw->fn]]
             [onyx.types :refer [dec-count! inc-count!]]
             [taoensso.timbre :refer [info error debug fatal]])
-  (:import [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BKException$Code
+  (:import [org.apache.zookeeper KeeperException$BadVersionException]
+           [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BKException$Code
             BookKeeper$DigestType AsyncCallback$AddCallback]))
 
 (def BookKeeperInput
@@ -146,7 +150,7 @@
         backoff-period 10
         commit-loop-ch (start-commit-loop! commit-ch log checkpoint-key)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
-                               (zk/ledgers-path (:onyx/id peer-opts)))
+                               (log-zk/ledgers-path (:onyx/id peer-opts)))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         zookeeper-timeout 60000
         bookkeeper-throttle 30000
@@ -332,10 +336,33 @@
     (.close ledger-handle)
     {}))
 
-(defn write-ledger [{:keys [onyx.core/task-map onyx.core/peer-opts] :as pipeline-data}]
+
+(defn add-ledger-data! [{:keys [conn] :as log} onyx-id job-id task-id ledger-id]
+  (let [bytes (compress [ledger-id])
+        node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
+    (when-not (zk/create conn node :persistent? true :data bytes)
+      (info "Couldn't add, now updating")
+      (while (try 
+               (let [current (zk/data conn node)
+                     version (:version (:stat current))
+                     data (decompress (:data current))
+                     new-data (conj data ledger-id)]
+                 (zk/set-data conn node (compress new-data) version)
+                 false)
+               (catch org.apache.zookeeper.KeeperException$BadVersionException t
+                 (info (format "Couldn't add ledger: %s %s %s %s. Retrying." 
+                               onyx-id job-id task-id ledger-id))
+                 true))))))
+
+(defn read-ledgers-data [{:keys [conn] :as log} onyx-id job-id task-id]
+  (let [node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
+    (decompress (:data (zk/data conn node)))))
+
+(defn write-ledger [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as pipeline-data}]
   (validate-task-map! task-map BookKeeperOutput)
-  (let [ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
-                              (zk/ledgers-path (:onyx/id peer-opts)))
+  (let [onyx-id (:onyx/id peer-opts)
+        ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
+                              (log-zk/ledgers-path onyx-id))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         zookeeper-timeout 60000
         bookkeeper-throttle 30000
@@ -347,6 +374,9 @@
         ensemble-size (:bookkeeper/ensemble-size task-map)
         quorum-size (:bookkeeper/quorum-size task-map)
         ledger-handle (obk/create-ledger client ensemble-size quorum-size digest password)
-        write-failed-code (atom false)]
-    (info "BookKeeper write-ledger: created new ledger:" (.getId ledger-handle))
+        write-failed-code (atom false)
+        ledger-id (.getId ledger-handle)]
+    (info "BookKeeper write-ledger: created new ledger:" ledger-id)
+    (add-ledger-data! log onyx-id job-id task-id ledger-id)
+    (info "read ledgers " onyx-id job-id task-id (read-ledgers-data log onyx-id job-id task-id))
     (->BookKeeperWriteLedger client ledger-handle serializer-fn write-failed-code)))
