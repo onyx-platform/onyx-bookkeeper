@@ -13,6 +13,7 @@
             [onyx.monitoring.measurements :refer [measure-latency]]
             [onyx.compression.nippy :refer [compress decompress]]
             [onyx.log.commands.peer-replica-view :refer [peer-site]]
+            [onyx.static.uuid :refer [random-uuid]]
             [onyx.peer.operation :refer [kw->fn]]
             [onyx.types :refer [dec-count! inc-count!]]
             [taoensso.timbre :refer [info error debug fatal]])
@@ -102,7 +103,7 @@
     (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
                    :ledger-id ledger-id
                    :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))}] 
-      (>!! read-ch (t/input (java.util.UUID/randomUUID) segment))
+      (>!! read-ch (t/input (random-uuid) segment))
       (if (.hasMoreElements entries)
         (recur entries 
                (.nextElement entries))))))
@@ -169,7 +170,7 @@
                                      (read-ledger-entries! client ledger-handle read-ch deserializer-fn last-acked max-id no-recovery? backoff-period)
                                      :finished)]
                           (if-not (= exit :shutdown)
-                            (>!! read-ch (t/input (java.util.UUID/randomUUID) :done))))
+                            (>!! read-ch (t/input (random-uuid) :done))))
                         (catch Exception e
                           (fatal e))))]
     {:bookkeeper/read-ch read-ch
@@ -237,7 +238,7 @@
   (retry-segment
     [_ event segment-id]
     (when-let [msg (get @pending-messages segment-id)]
-      (>!! read-ch (assoc msg :id (java.util.UUID/randomUUID))))
+      (>!! read-ch (assoc msg :id (random-uuid))))
     (swap! pending-messages dissoc segment-id))
 
   (pending?
