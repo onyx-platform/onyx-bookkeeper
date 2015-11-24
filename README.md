@@ -2,7 +2,7 @@
 
 Onyx plugin providing read and write facilities for BookKeeper ledgers
 
-#### Installation
+#### Installation 
 
 In your project file:
 
