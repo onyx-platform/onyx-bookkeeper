@@ -341,7 +341,6 @@
   (let [bytes (compress [ledger-id])
         node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
     (when-not (zk/create conn node :persistent? true :data bytes)
-      (info "Couldn't add, now updating")
       (while (try 
                (let [current (zk/data conn node)
                      version (:version (:stat current))
@@ -378,5 +377,4 @@
         ledger-id (.getId ledger-handle)]
     (info "BookKeeper write-ledger: created new ledger:" ledger-id)
     (add-ledger-data! log onyx-id job-id task-id ledger-id)
-    (info "read ledgers " onyx-id job-id task-id (read-ledgers-data log onyx-id job-id task-id))
     (->BookKeeperWriteLedger client ledger-handle serializer-fn write-failed-code)))
