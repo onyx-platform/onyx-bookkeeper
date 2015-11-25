@@ -89,8 +89,6 @@
                   peer-config
                   {:catalog catalog :workflow workflow :lifecycles lifecycles
                    :task-scheduler :onyx.task-scheduler/balanced})
-            task-ids (:task-ids job)
-            tasks (zipmap (map :name task-ids) task-ids)
 
             _ (doseq [v input-values]
                 (>!! @in-chan v))
@@ -98,7 +96,7 @@
 
             _ (onyx.api/await-job-completion peer-config (:job-id job))
             job-id (:job-id job)
-            task-id (get-in tasks [:write-messages :id])
+            task-id (get-in (:task-ids job) [:write-messages :id])
             ledger-ids (read-ledgers-data (:log (:env env)) id job-id task-id)]
         (is (= input-values 
                (sort-by :a 
