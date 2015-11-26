@@ -63,7 +63,7 @@
                     :bookkeeper/zookeeper-ledgers-root-path ledgers-root-path
                     :bookkeeper/ledger-id (.getId ledger-handle)
                     :bookkeeper/digest-type :mac
-                    :bookkeeper/deserializer-fn :onyx.compression.nippy/decompress
+                    :bookkeeper/deserializer-fn :onyx.compression.nippy/zookeeper-decompress
                     ;:bookkeeper/ledger-start-id 0
                     ;:bookkeeper/ledger-end-id 499
                     ;:checkpoint/key "global-checkpoint-key"
@@ -92,7 +92,7 @@
           ;; add data to ledger
           n-entries 29 
           _ (mapv (fn [v]
-                    (.addEntry ledger-handle (nippy/compress {:value v})))
+                    (.addEntry ledger-handle (nippy/zookeeper-compress {:value v})))
                   (range n-entries))
           _ (.close ledger-handle)
           job-id (:job-id (onyx.api/submit-job

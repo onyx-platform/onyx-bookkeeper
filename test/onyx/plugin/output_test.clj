@@ -64,7 +64,7 @@
                   :onyx/type :output
                   :onyx/n-peers 2
                   :onyx/medium :bookkeeper
-                  :bookkeeper/serializer-fn :onyx.compression.nippy/compress
+                  :bookkeeper/serializer-fn :onyx.compression.nippy/zookeeper-compress
                   :bookkeeper/password-bytes password
                   :bookkeeper/ensemble-size 3
                   :bookkeeper/quorum-size 3
@@ -112,7 +112,7 @@
                                         entries (.readEntries ledger-handle start end)]
                                     (loop [values []
                                            ledger-entry (.nextElement entries)] 
-                                      (let [entry (nippy/decompress (.getEntry ^LedgerEntry ledger-entry))
+                                      (let [entry (nippy/zookeeper-decompress (.getEntry ^LedgerEntry ledger-entry))
                                             new-entries (conj values entry)]
                                         (if (.hasMoreElements entries)
                                           (recur new-entries (.nextElement entries))

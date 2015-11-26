@@ -33,7 +33,7 @@ Catalog entry:
  :bookkeeper/ledger-end-id <<OPTIONAL_LEDGER_END_INDEX>>
  :bookkeeper/no-recovery? false
  :bookkeeper/digest-type :mac
- :bookkeeper/deserializer-fn :onyx.compression.nippy/decompress
+ :bookkeeper/deserializer-fn :your-ns/your-deserializer-fn
  :bookkeeper/password-bytes (.getBytes "YOURPASSWORD")
  :checkpoint/force-reset? true
  :onyx/max-peers 1
@@ -79,7 +79,7 @@ Catalog entry:
  :onyx/medium :bookkeeper
  :bookkeeper/zookeeper-addr <<ZOOKEEPER_ADDR>>
  :bookkeeper/digest-type :mac
- :bookkeeper/serializer-fn :onyx.compression.nippy/compress
+ :bookkeeper/serializer-fn :your-ns/your-serializer-fn
  :bookkeeper/password-bytes (.getBytes "YOURPASSWORD")
  :onyx/batch-size batch-size
  :onyx/doc "Transacts segments to storage"}

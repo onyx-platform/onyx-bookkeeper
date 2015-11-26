@@ -11,7 +11,7 @@
             [onyx.log.curator :as zk]
             [onyx.extensions :as extensions]
             [onyx.monitoring.measurements :refer [measure-latency]]
-            [onyx.compression.nippy :refer [compress decompress]]
+            [onyx.compression.nippy :refer [zookeeper-compress zookeeper-decompress]]
             [onyx.log.commands.peer-replica-view :refer [peer-site]]
             [onyx.static.uuid :refer [random-uuid]]
             [onyx.peer.operation :refer [kw->fn]]
@@ -339,15 +339,15 @@
 
 
 (defn add-ledger-data! [{:keys [conn] :as log} onyx-id job-id task-id ledger-id]
-  (let [bytes (compress [ledger-id])
+  (let [bytes (zookeeper-compress [ledger-id])
         node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
     (when-not (zk/create conn node :persistent? true :data bytes)
       (while (try 
                (let [current (zk/data conn node)
                      version (:version (:stat current))
-                     data (decompress (:data current))
+                     data (zookeeper-decompress (:data current))
                      new-data (conj data ledger-id)]
-                 (zk/set-data conn node (compress new-data) version)
+                 (zk/set-data conn node (zookeeper-compress new-data) version)
                  false)
                (catch org.apache.zookeeper.KeeperException$BadVersionException t
                  (info (format "Couldn't add ledger: %s %s %s %s. Retrying." 
@@ -356,7 +356,7 @@
 
 (defn read-ledgers-data [{:keys [conn] :as log} onyx-id job-id task-id]
   (let [node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
-    (decompress (:data (zk/data conn node)))))
+    (zookeeper-decompress (:data (zk/data conn node)))))
 
 (defn write-ledger [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as pipeline-data}]
   (validate-task-map! task-map BookKeeperOutput)
