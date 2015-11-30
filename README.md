@@ -88,7 +88,7 @@ Catalog entry:
 Lifecycle entry:
 
 ```clojure
-{:lifecycle/task :write-datoms
+{:lifecycle/task :write-ledger
  :lifecycle/calls :onyx.plugin.bookkeeper/write-ledger-calls}
 ```
 
