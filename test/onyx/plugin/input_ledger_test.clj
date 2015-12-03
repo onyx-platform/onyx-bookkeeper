@@ -72,7 +72,7 @@
                     :onyx/restart-pred-fn ::restartable?
                     :onyx/max-peers 1
                     :onyx/batch-size batch-size
-                    :onyx/doc "Reads a sequence of datoms from the d/tx-range API"}
+                    :onyx/doc "Reads from a BookKeeper ledger"}
 
                    {:onyx/name :persist
                     :onyx/plugin :onyx.plugin.core-async/output

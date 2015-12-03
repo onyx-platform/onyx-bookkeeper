@@ -7,7 +7,7 @@ Onyx plugin providing read and write facilities for BookKeeper ledgers
 In your project file:
 
 ```clojure
-[org.onyxplatform/onyx-bookkeeper "0.8.0.0-alpha5"]
+[org.onyxplatform/onyx-bookkeeper "0.8.2.2-SNAPSHOT"]
 ```
 In your peer boot-up namespace:
 
@@ -88,7 +88,7 @@ Catalog entry:
 Lifecycle entry:
 
 ```clojure
-{:lifecycle/task :write-datoms
+{:lifecycle/task :write-ledger
  :lifecycle/calls :onyx.plugin.bookkeeper/write-ledger-calls}
 ```
 
