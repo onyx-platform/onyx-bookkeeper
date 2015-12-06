@@ -112,7 +112,7 @@
 
 (defn read-ledger-entries! [client ^LedgerHandle ledger-handle read-ch deserializer-fn last-acked max-id no-recovery? backoff-period]
   (let [ledger-id (.getId ledger-handle)]
-    (info "Starting BooKeeper input ledger:" ledger-id "reader at:" (inc last-acked))
+    (info "Starting BookKeeper input ledger:" ledger-id "reader at:" (inc last-acked))
     (loop [last-confirmed (.getLastAddConfirmed ledger-handle) 
            start (inc last-acked)
            end (min last-confirmed max-id (+ start read-chunk-size))]
