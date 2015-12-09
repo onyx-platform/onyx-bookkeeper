@@ -290,9 +290,22 @@
   (.close client)
   {})
 
+(defn handle-write-ledger-exception [lifecycle exception]
+  ;; Note, would catch exception somewhere else and log
+  ;; Would then call :lifecycle/handle-exception in order listed in job :lifecycles
+  ;; A nil response would cause the next lifecycle to be called i.e. call next lifecycle call's map's :lifecycle/handle-exception in turn
+  ;; until you get a response. If no :lifecycle/handle-exception gives a response, default is either kill job or restart. Undecided.
+  (cond (and (= lifecycle :lifecycle/before-task-start)
+             (instance? org.apache.bookkeeper.client.BKException$BKNotEnoughBookiesException e))
+        :restart
+        ;; Depending on the plugin, you may want to default to a nil response here
+        :else 
+        :kill-job))
+
 (def write-ledger-calls
   {:lifecycle/before-task-start inject-write-ledger-resources
-   :lifecycle/after-task-stop close-write-ledger-resources})
+   :lifecycle/after-task-stop close-write-ledger-resources
+   :lifecycle/handle-exception handle-write-ledger-exception})
 
 (def HandleWriteCallback
   (reify AsyncCallback$AddCallback
