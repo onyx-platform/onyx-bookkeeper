@@ -66,7 +66,6 @@
   (close! read-ch)
   (close! commit-ch)
   (close! shutdown-ch)
-  (<!! producer-ch)
   {})
 
 (defn set-starting-offset! [log task-map checkpoint-key start]
