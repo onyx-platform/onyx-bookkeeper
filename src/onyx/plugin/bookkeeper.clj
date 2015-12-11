@@ -63,10 +63,10 @@
 
 (defn close-read-ledgers-resources
   [{:keys [bookkeeper/producer-ch bookkeeper/commit-ch bookkeeper/read-ch bookkeeper/shutdown-ch] :as event} lifecycle]
+  ;; Before we waited for producer ch to return. We should probably still do so by checking the shutdown-ch
+  (close! shutdown-ch)
   (close! read-ch)
   (close! commit-ch)
-  (close! shutdown-ch)
-  (<!! producer-ch)
   {})
 
 (defn set-starting-offset! [log task-map checkpoint-key start]
@@ -97,11 +97,11 @@
     (throw (Exception. "Restarted task, however it was already completed for this job.
                        This is currently unhandled."))))
 
-(defn read-ledger-chunk! [ledger-handle deserializer-fn ledger-id read-ch start end]
+(defn read-ledger-chunk! [ledger-handle deserializer-fn read-ch start end]
   (loop [entries (.readEntries ledger-handle start end)
          ledger-entry (.nextElement entries)] 
     (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
-                   :ledger-id ledger-id
+                   :ledger-id (.getId ledger-handle)
                    :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))}] 
       (>!! read-ch (t/input (random-uuid) segment))
       (if (.hasMoreElements entries)
@@ -110,35 +110,38 @@
 
 (def read-chunk-size 100)
 
-(defn read-ledger-entries! [client ^LedgerHandle ledger-handle read-ch deserializer-fn last-acked max-id no-recovery? backoff-period]
-  (let [ledger-id (.getId ledger-handle)]
-    (info "Starting BookKeeper input ledger:" ledger-id "reader at:" (inc last-acked))
-    (loop [last-confirmed (.getLastAddConfirmed ledger-handle) 
-           start (inc last-acked)
-           end (min last-confirmed max-id (+ start read-chunk-size))]
-      (let [not-fully-read? (and (not (neg? last-confirmed)) 
-                                 (< last-acked last-confirmed)
-                                 (< start last-confirmed))]
-        (if not-fully-read?
-          (read-ledger-chunk! ledger-handle deserializer-fn ledger-id read-ch start end)
-          (Thread/sleep backoff-period))
-        (when (or not-fully-read? 
-                  (not (.isClosed client ledger-id)))
-          (let [new-last-confirmed (if no-recovery?
-                                     ;; new confirmations may occur in recover mode
-                                     (.getLastAddConfirmed ledger-handle)
-                                     last-confirmed)]
-            (recur new-last-confirmed
-                   (inc end)
-                   (min last-confirmed max-id (+ (inc end) read-chunk-size)))))))))
+(defn read-ledger-entries! 
+  [client ledger-id digest password read-ch deserializer-fn backoff-period start end]
+  (let [ledger-handle (obk/open-ledger client ledger-id digest password)
+        last-confirmed (.getLastAddConfirmed ledger-handle)
+        bounded-end (min end last-confirmed)
+        chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))
+        _ (info "Starting final read: " start end last-confirmed bounded-end (vec chunks))]
+    (run! (fn [[s e]]
+              (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
+            chunks)))
+
+(defn no-recovery-read-ledger-entries! 
+  [client ledger-id digest password read-ch deserializer-fn backoff-period start end]
+  (let [ledger-handle (obk/open-ledger-no-recovery client ledger-id digest password)
+        last-confirmed (.getLastAddConfirmed ledger-handle)
+        bounded-end (min end last-confirmed)
+        chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))]
+    (run! (fn [[s e]]
+              (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
+            chunks)
+    (if (.isClosed client ledger-id)
+      (read-ledger-entries! client ledger-id digest password read-ch deserializer-fn backoff-period (inc bounded-end) end)
+      (do
+        (Thread/sleep 1000)
+        (recur client ledger-id digest password read-ch deserializer-fn backoff-period (inc bounded-end) end)))))
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
-  (let [start-id (if-let [start (:bookkeeper/ledger-start-id task-map)]
-                   (dec start) 
-                   -1) 
+  (let [; decrement because we are going to store this as a checkpoint and then recover
+        start-id (dec (or (:bookkeeper/ledger-start-id task-map) 0))
         max-id (or (:bookkeeper/ledger-end-id task-map) Double/POSITIVE_INFINITY)
         {:keys [read-ch shutdown-ch commit-ch]} pipeline
         checkpoint-key (or (:checkpoint/key task-map) task-id)
@@ -151,28 +154,29 @@
         backoff-period 10
         commit-loop-ch (start-commit-loop! commit-ch log checkpoint-key)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
-                               (log-zk/ledgers-path (:onyx/id peer-opts)))
+                              (log-zk/ledgers-path (:onyx/id peer-opts)))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         zookeeper-timeout 60000
         bookkeeper-throttle 30000
         client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         ledger-id (:bookkeeper/ledger-id task-map)
-        password (or (:bookkeeper/password-bytes task-map) (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
-        no-recovery? (:bookkeeper/no-recovery? task-map)
+        password (or (:bookkeeper/password-bytes task-map) 
+                     (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
         deserializer-fn (kw->fn (:bookkeeper/deserializer-fn task-map))
         digest (digest-type (:bookkeeper/digest-type task-map))
-        ledger-handle (if no-recovery? 
-                        (obk/open-ledger-no-recovery client ledger-id digest password)
-                        (obk/open-ledger client ledger-id digest password) )
+        read-fn (if (:bookkeeper/no-recovery? task-map)
+                  no-recovery-read-ledger-entries!
+                  read-ledger-entries!)
         producer-ch (thread
                       (try
-                        (let [exit (loop [last-acked (:largest checkpointed)]
-                                     (read-ledger-entries! client ledger-handle read-ch deserializer-fn last-acked max-id no-recovery? backoff-period)
+                        (let [exit (loop [last-acked (inc (:largest checkpointed))]
+                                     (read-fn client ledger-id digest password read-ch deserializer-fn backoff-period last-acked max-id)
                                      :finished)]
-                          (if-not (= exit :shutdown)
+                          (if (= exit :finished)
                             (>!! read-ch (t/input (random-uuid) :done))))
                         (catch Exception e
-                          (fatal e))))]
+                          (>!! read-ch (t/input (random-uuid) :crash))
+                          (fatal "BookKeeper plugin: error reading." e))))]
     {:bookkeeper/read-ch read-ch
      :bookkeeper/shutdown-ch shutdown-ch
      :bookkeeper/commit-ch commit-ch
@@ -210,6 +214,9 @@
                            (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
       (doseq [m batch]
         (let [message (:message m)]
+          (when (= message :crash)
+            (throw (Exception. "Plugin crashed. Crash read.")))
+
           (when-not (= message :done)
             (swap! top-index max (:entry-id message))
             (swap! pending-indexes conj (:entry-id message))))
