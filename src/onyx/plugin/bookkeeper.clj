@@ -28,6 +28,7 @@
    (s/optional-key :bookkeeper/ledger-start-id) onyx-schema/SPosInt
    (s/optional-key :bookkeeper/ledger-end-id) onyx-schema/SPosInt
    (s/optional-key :bookkeeper/no-recovery?) s/Bool
+   (s/optional-key :bookkeeper/no-recovery-empty-read-back-off) onyx-schema/SPosInt
    (s/optional-key :bookkeeper/read-max-chunk-size) onyx-schema/PosInt
    (s/optional-key :bookkeeper/zookeeper-ledgers-root-path) s/Str
    (s/optional-key :checkpoint/force-reset?) s/Bool
@@ -111,66 +112,80 @@
 (def read-chunk-size 100)
 
 (defn read-ledger-entries! 
-  [client ledger-id digest password read-ch deserializer-fn backoff-period start end]
-  (let [ledger-handle (obk/open-ledger client ledger-id digest password)
-        last-confirmed (.getLastAddConfirmed ledger-handle)
-        bounded-end (min end last-confirmed)
-        chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))
-        _ (info "Starting final read: " start end last-confirmed bounded-end (vec chunks))]
-    (run! (fn [[s e]]
-              (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
-            chunks)))
+  [client {:keys [bookkeeper/ledger-id bookkeeper/password-bytes
+                  bookkeeper/ledger-end-id bookkeeper/no-recovery-empty-read-back-off] :as task-map}
+   digest read-ch deserializer-fn start]
+  (let [ledger-handle (obk/open-ledger client ledger-id digest password-bytes)]
+    (try
+      (let [last-confirmed (.getLastAddConfirmed ledger-handle)
+            bounded-end (min ledger-end-id last-confirmed)
+            chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))
+            _ (info "Starting final read: " start ledger-end-id last-confirmed bounded-end (vec chunks))]
+        (run! (fn [[s e]]
+                (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
+              chunks))
+      (finally (.close ledger-handle)))))
 
 (defn no-recovery-read-ledger-entries! 
-  [client ledger-id digest password read-ch deserializer-fn backoff-period start end]
-  (let [ledger-handle (obk/open-ledger-no-recovery client ledger-id digest password)
+  [client {:keys [bookkeeper/ledger-id bookkeeper/password-bytes 
+                  bookkeeper/ledger-end-id bookkeeper/no-recovery-empty-read-back-off] :as task-map} 
+   digest read-ch deserializer-fn start]
+  (let [ledger-handle (obk/open-ledger-no-recovery client ledger-id digest password-bytes)
         last-confirmed (.getLastAddConfirmed ledger-handle)
-        bounded-end (min end last-confirmed)
+        bounded-end (min ledger-end-id last-confirmed)
         chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))]
-    (run! (fn [[s e]]
+    (try 
+      (run! (fn [[s e]]
               (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
             chunks)
+      (finally (.close ledger-handle)))
+
     (if (.isClosed client ledger-id)
-      (read-ledger-entries! client ledger-id digest password read-ch deserializer-fn backoff-period (inc bounded-end) end)
+      (read-ledger-entries! client task-map digest read-ch deserializer-fn (inc bounded-end))
       (do
-        (Thread/sleep 1000)
-        (recur client ledger-id digest password read-ch deserializer-fn backoff-period (inc bounded-end) end)))))
+        (Thread/sleep no-recovery-empty-read-back-off)
+        (recur client task-map digest read-ch deserializer-fn (inc bounded-end))))))
+
+(defn default-value [task-map k v]
+  (update task-map k (fn [curr] (or curr v))))
 
 (defn inject-read-ledgers-resources
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
-  (let [; decrement because we are going to store this as a checkpoint and then recover
-        start-id (dec (or (:bookkeeper/ledger-start-id task-map) 0))
-        max-id (or (:bookkeeper/ledger-end-id task-map) Double/POSITIVE_INFINITY)
+  (when-not (:bookkeeper/password-bytes task-map)
+    (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
+
+  (let [{:keys [bookkeeper/ledger-start-id bookkeeper/ledger-end-id bookkeeper/zookeeper-ledgers-root-path
+                bookkeeper/zookeeper-addr bookkeeper/deserializer-fn bookkeeper/no-recovery?] :as defaulted-task-map} 
+        (-> task-map 
+            (default-value :bookkeeper/read-max-chunk-size 1000)
+            (default-value :onyx/batch-timeout (:onyx/batch-timeout defaults))
+            (default-value :bookkeeper/zookeeper-ledgers-root-path (log-zk/ledgers-path (:onyx/id peer-opts)))
+            (default-value :bookkeeper/ledger-start-id 0)
+            (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
+            (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
+            (default-value :checkpoint/key task-id))
         {:keys [read-ch shutdown-ch commit-ch]} pipeline
-        checkpoint-key (or (:checkpoint/key task-map) task-id)
-        _ (set-starting-offset! log task-map checkpoint-key start-id)
+        ;; decrement because we are going to store this as a checkpoint and then inc after recover
+        checkpoint-key (:checkpoint/key defaulted-task-map)
+        _ (set-starting-offset! log task-map checkpoint-key (dec ledger-start-id))
         checkpointed (extensions/read-chunk log :chunk checkpoint-key)
-        _ (validate-within-supplied-bounds start-id max-id (:largest checkpointed))
+        _ (validate-within-supplied-bounds (dec ledger-start-id) ledger-end-id (:largest checkpointed))
         _ (check-completed task-map checkpointed)
-        read-size (or (:bookkeeper/read-max-chunk-size task-map) 1000)
-        batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
-        backoff-period 10
         commit-loop-ch (start-commit-loop! commit-ch log checkpoint-key)
-        ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
-                              (log-zk/ledgers-path (:onyx/id peer-opts)))
-        zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         zookeeper-timeout 60000
         bookkeeper-throttle 30000
-        client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
-        ledger-id (:bookkeeper/ledger-id task-map)
-        password (or (:bookkeeper/password-bytes task-map) 
-                     (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
-        deserializer-fn (kw->fn (:bookkeeper/deserializer-fn task-map))
+        client (obk/bookkeeper zookeeper-addr zookeeper-ledgers-root-path zookeeper-timeout bookkeeper-throttle)
+        deserializer-fn (kw->fn deserializer-fn)
         digest (digest-type (:bookkeeper/digest-type task-map))
-        read-fn (if (:bookkeeper/no-recovery? task-map)
+        read-fn (if no-recovery?
                   no-recovery-read-ledger-entries!
                   read-ledger-entries!)
         producer-ch (thread
                       (try
                         (let [exit (loop [last-acked (inc (:largest checkpointed))]
-                                     (read-fn client ledger-id digest password read-ch deserializer-fn backoff-period last-acked max-id)
+                                     (read-fn client defaulted-task-map digest read-ch deserializer-fn last-acked)
                                      :finished)]
                           (if (= exit :finished)
                             (>!! read-ch (t/input (random-uuid) :done))))
