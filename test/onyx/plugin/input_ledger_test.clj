@@ -63,6 +63,7 @@
                     :bookkeeper/zookeeper-ledgers-root-path ledgers-root-path
                     :bookkeeper/ledger-id (.getId ledger-handle)
                     :bookkeeper/digest-type :mac
+                    :bookkeeper/no-recovery? true
                     :bookkeeper/deserializer-fn :onyx.compression.nippy/zookeeper-decompress
                     ;:bookkeeper/ledger-start-id 0
                     ;:bookkeeper/ledger-end-id 499
@@ -91,16 +92,16 @@
                        :lifecycle/calls :onyx.plugin.core-async/writer-calls}]
           ;; add data to ledger
           n-entries 29 
-          _ (mapv (fn [v]
-                    (.addEntry ledger-handle (nippy/zookeeper-compress {:value v})))
-                  (range n-entries))
+          entries (mapv (fn [v]
+                          {:value v ;:random (doall (repeatedly 250000 #(rand-int 100000000)))
+                           })
+                        (range n-entries))
+          _ (doseq [v entries]
+              (.addEntry ledger-handle (nippy/zookeeper-compress v)))
           _ (.close ledger-handle)
           job-id (:job-id (onyx.api/submit-job
                             peer-config
                             {:catalog catalog :workflow workflow :lifecycles lifecycles
                              :task-scheduler :onyx.task-scheduler/balanced}))
           results (take-segments! @out-chan)]
-      (is (= (map (fn [v]
-                    {:value v})
-                  (range n-entries))
-             (sort-by :value (map :value (butlast results))))))))) 
+      (is (= entries (sort-by :value (map :value (butlast results))))))))) 
