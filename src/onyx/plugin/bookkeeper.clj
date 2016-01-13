@@ -17,7 +17,7 @@
             [onyx.peer.operation :refer [kw->fn]]
             [onyx.types :refer [dec-count! inc-count!]]
             [taoensso.timbre :refer [info error debug fatal]])
-  (:import [org.apache.zookeeper KeeperException$BadVersionException]
+  (:import [org.apache.zookeeper KeeperException$BadVersionException KeeperException$ConnectionLossException]
            [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BKException$Code
             BookKeeper$DigestType AsyncCallback$AddCallback]))
 
@@ -294,8 +294,14 @@
                           commit-ch
                           shutdown-ch)))
 
+(defn read-handle-exception [event lifecycle lf-kw exception]
+  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
+        :restart
+        :else :defer))
+
 (def read-ledgers-calls
   {:lifecycle/before-task-start inject-read-ledgers-resources
+   :lifecycle/handle-exception read-handle-exception
    :lifecycle/after-task-stop close-read-ledgers-resources})
 
 ;;;;;;;;;;;;;
@@ -312,8 +318,14 @@
   (.close client)
   {})
 
+(defn write-handle-exception [event lifecycle lf-kw exception]
+  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
+        :restart
+        :else :defer))
+
 (def write-ledger-calls
   {:lifecycle/before-task-start inject-write-ledger-resources
+   :lifecycle/handle-exception write-handle-exception
    :lifecycle/after-task-stop close-write-ledger-resources})
 
 (def HandleWriteCallback
