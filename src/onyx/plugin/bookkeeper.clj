@@ -119,7 +119,7 @@
     (try
       (let [last-confirmed (.getLastAddConfirmed ledger-handle)
             bounded-end (min ledger-end-id last-confirmed)
-            chunks (partition-all 2 1 (range (dec start) (inc bounded-end) read-chunk-size))
+            chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))
             _ (info "Starting final read: " start ledger-end-id last-confirmed bounded-end (vec chunks))]
         (run! (fn [[s e]]
                 (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
@@ -133,7 +133,7 @@
   (let [ledger-handle (obk/open-ledger-no-recovery client ledger-id digest password-bytes)
         last-confirmed (.getLastAddConfirmed ledger-handle)
         bounded-end (min ledger-end-id last-confirmed)
-        chunks (partition-all 2 1 (range (dec start) (inc bounded-end) read-chunk-size))]
+        chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))]
     (try 
       (run! (fn [[s e]]
               (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
