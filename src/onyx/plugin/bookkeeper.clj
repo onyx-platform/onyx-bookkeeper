@@ -17,7 +17,7 @@
             [onyx.peer.operation :refer [kw->fn]]
             [onyx.types :refer [dec-count! inc-count!]]
             [taoensso.timbre :refer [info error debug fatal]])
-  (:import [org.apache.zookeeper KeeperException$BadVersionException]
+  (:import [org.apache.zookeeper KeeperException$BadVersionException KeeperException$ConnectionLossException]
            [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BKException$Code
             BookKeeper$DigestType AsyncCallback$AddCallback]))
 
@@ -119,7 +119,7 @@
     (try
       (let [last-confirmed (.getLastAddConfirmed ledger-handle)
             bounded-end (min ledger-end-id last-confirmed)
-            chunks (partition-all 2 1 (range (dec start) (inc bounded-end) read-chunk-size))
+            chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))
             _ (info "Starting final read: " start ledger-end-id last-confirmed bounded-end (vec chunks))]
         (run! (fn [[s e]]
                 (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
@@ -133,7 +133,7 @@
   (let [ledger-handle (obk/open-ledger-no-recovery client ledger-id digest password-bytes)
         last-confirmed (.getLastAddConfirmed ledger-handle)
         bounded-end (min ledger-end-id last-confirmed)
-        chunks (partition-all 2 1 (range (dec start) (inc bounded-end) read-chunk-size))]
+        chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))]
     (try 
       (run! (fn [[s e]]
               (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
@@ -294,8 +294,14 @@
                           commit-ch
                           shutdown-ch)))
 
+(defn read-handle-exception [event lifecycle lf-kw exception]
+  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
+        :restart
+        :else :defer))
+
 (def read-ledgers-calls
   {:lifecycle/before-task-start inject-read-ledgers-resources
+   :lifecycle/handle-exception read-handle-exception
    :lifecycle/after-task-stop close-read-ledgers-resources})
 
 ;;;;;;;;;;;;;
@@ -312,8 +318,14 @@
   (.close client)
   {})
 
+(defn write-handle-exception [event lifecycle lf-kw exception]
+  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
+        :restart
+        :else :defer))
+
 (def write-ledger-calls
   {:lifecycle/before-task-start inject-write-ledger-resources
+   :lifecycle/handle-exception write-handle-exception
    :lifecycle/after-task-stop close-write-ledger-resources})
 
 (def HandleWriteCallback
