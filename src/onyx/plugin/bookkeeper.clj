@@ -373,7 +373,7 @@
 
 (defn add-ledger-data! [{:keys [conn] :as log} path ledger-id]
   (let [bytes (zookeeper-compress [ledger-id])]
-    (when-not (zk/create conn path :persistent? true :data bytes)
+    (when-not (zk/create-all conn path :persistent? true :data bytes)
       (while (try 
                (let [current (zk/data conn path)
                      version (:version (:stat current))
@@ -386,7 +386,7 @@
                  true))))))
 
 (defn bookkeeper-write-ledger-ids-path [onyx-id & path-args]
-  (str (log-zk/catalog-path onyx-id) "/" (clojure.string/join "/" path-args)))
+  (str (log-zk/catalog-path onyx-id) "/" (clojure.string/join "/" path-args) "/ledgers"))
 
 (defn read-ledgers-data [{:keys [conn] :as log} onyx-id job-id task-id]
   (let [node (bookkeeper-write-ledger-ids-path onyx-id job-id task-id)]
