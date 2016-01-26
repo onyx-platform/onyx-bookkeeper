@@ -18,8 +18,8 @@
             [onyx.types :refer [dec-count! inc-count!]]
             [taoensso.timbre :refer [info error debug fatal]])
   (:import [org.apache.zookeeper KeeperException$BadVersionException KeeperException$ConnectionLossException]
-           [org.apache.bookkeeper.client LedgerHandle LedgerEntry BookKeeper BKException$Code
-            BookKeeper$DigestType AsyncCallback$AddCallback]))
+           [org.apache.bookkeeper.client 
+            LedgerHandle LedgerEntry BookKeeper BKException$Code BKException$ZKException BookKeeper$DigestType AsyncCallback$AddCallback]))
 
 (def BookKeeperInput
   {:bookkeeper/zookeeper-addr s/Str
@@ -190,7 +190,7 @@
                           (if (= exit :finished)
                             (>!! read-ch (t/input (random-uuid) :done))))
                         (catch Exception e
-                          (>!! read-ch (t/input (random-uuid) :crash))
+                          (>!! read-ch (t/input (random-uuid) e))
                           (fatal e "BookKeeper plugin: error reading."))))]
     {:bookkeeper/read-ch read-ch
      :bookkeeper/shutdown-ch shutdown-ch
@@ -229,8 +229,8 @@
                            (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
       (doseq [m batch]
         (let [message (:message m)]
-          (when (= message :crash)
-            (throw (Exception. "Plugin crashed. Crash read.")))
+          (when (instance? java.lang.Throwable message)
+            (throw message))
 
           (when-not (= message :done)
             (swap! top-index max (:entry-id message))
@@ -295,9 +295,13 @@
                           shutdown-ch)))
 
 (defn read-handle-exception [event lifecycle lf-kw exception]
-  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
-        :restart
-        :else :defer))
+  (let [exception-type (type exception)] 
+    (case exception-type 
+      org.apache.zookeeper.KeeperException$ConnectionLossException
+      :restart
+      org.apache.bookkeeper.client.BKException$ZKException
+      :restart
+      :defer)))
 
 (def read-ledgers-calls
   {:lifecycle/before-task-start inject-read-ledgers-resources
@@ -319,9 +323,13 @@
   {})
 
 (defn write-handle-exception [event lifecycle lf-kw exception]
-  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
-        :restart
-        :else :defer))
+  (let [exception-type (type exception)] 
+    (case exception-type 
+      org.apache.zookeeper.KeeperException$ConnectionLossException
+      :restart
+      org.apache.bookkeeper.client.BKException$ZKException
+      :restart
+      :defer)))
 
 (def write-ledger-calls
   {:lifecycle/before-task-start inject-write-ledger-resources
