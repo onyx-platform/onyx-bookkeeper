@@ -371,25 +371,25 @@
     (.close ledger-handle)
     {}))
 
-
-(defn add-ledger-data! [{:keys [conn] :as log} onyx-id job-id task-id ledger-id]
-  (let [bytes (zookeeper-compress [ledger-id])
-        node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
-    (when-not (zk/create conn node :persistent? true :data bytes)
+(defn add-ledger-data! [{:keys [conn] :as log} path ledger-id]
+  (let [bytes (zookeeper-compress [ledger-id])]
+    (when-not (zk/create-all conn path :persistent? true :data bytes)
       (while (try 
-               (let [current (zk/data conn node)
+               (let [current (zk/data conn path)
                      version (:version (:stat current))
                      data (zookeeper-decompress (:data current))
                      new-data (conj data ledger-id)]
-                 (zk/set-data conn node (zookeeper-compress new-data) version)
+                 (zk/set-data conn path (zookeeper-compress new-data) version)
                  false)
                (catch org.apache.zookeeper.KeeperException$BadVersionException t
-                 (info (format "Couldn't add ledger: %s %s %s %s. Retrying." 
-                               onyx-id job-id task-id ledger-id))
+                 (info (format "Couldn't add ledger under: %s. Retrying." path))
                  true))))))
 
+(defn bookkeeper-write-ledger-ids-path [onyx-id & path-args]
+  (str (log-zk/catalog-path onyx-id) "/" (clojure.string/join "/" path-args) "/ledgers"))
+
 (defn read-ledgers-data [{:keys [conn] :as log} onyx-id job-id task-id]
-  (let [node (str (log-zk/catalog-path onyx-id) "/" job-id "/" task-id)]
+  (let [node (bookkeeper-write-ledger-ids-path onyx-id job-id task-id)]
     (zookeeper-decompress (:data (zk/data conn node)))))
 
 (defn write-ledger [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as pipeline-data}]
@@ -398,6 +398,7 @@
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
                               (log-zk/ledgers-path onyx-id))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
+        ;; FIXME, parameterize these in the task-map
         zookeeper-timeout 60000
         bookkeeper-throttle 30000
         client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
@@ -411,5 +412,43 @@
         write-failed-code (atom false)
         ledger-id (.getId ledger-handle)]
     (info "BookKeeper write-ledger: created new ledger:" ledger-id)
-    (add-ledger-data! log onyx-id job-id task-id ledger-id)
+    (add-ledger-data! log (bookkeeper-write-ledger-ids-path onyx-id job-id task-id) ledger-id)
     (->BookKeeperWriteLedger client ledger-handle serializer-fn write-failed-code)))
+
+;;;;;;;;;;;;;;;;;;
+;; Lifecycle only for use in triggers etc
+
+(defn inject-new-ledger
+  [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as event} lifecycle]
+  (let [onyx-id (:onyx/id peer-opts)
+        ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path lifecycle)
+                              (log-zk/ledgers-path onyx-id))
+        zookeeper-addr (:bookkeeper/zookeeper-addr lifecycle)
+        ;; FIXME, parameterize these in the lifecycle
+        zookeeper-timeout 60000
+        bookkeeper-throttle 30000
+        client (obk/bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
+        serializer-fn (kw->fn (:bookkeeper/serializer-fn lifecycle))
+        digest (digest-type (:bookkeeper/digest-type lifecycle))
+        password (or (:bookkeeper/password-bytes lifecycle) 
+                     (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
+        ensemble-size (:bookkeeper/ensemble-size lifecycle)
+        quorum-size (:bookkeeper/quorum-size lifecycle)
+        ledger-handle (obk/create-ledger client ensemble-size quorum-size digest password)
+        ledger-id (.getId ledger-handle)
+        ledger-data-path (bookkeeper-write-ledger-ids-path onyx-id job-id task-id)]
+    (info "BookKeeper write-ledger lifecycle: created new ledger:" ledger-id)
+    (add-ledger-data! log ledger-data-path ledger-id)
+    {:bookkeeper/client client
+     :bookkeeper/serializer-fn serializer-fn
+     :bookkeeper/ledger-data-path ledger-data-path
+     :bookkeeper/ledger-handle ledger-handle}))
+
+(defn close-new-ledger-resources
+  [{:keys [bookkeeper/client bookkeeper/ledger-handle] :as event} lifecycle]
+  (.close client)
+  {})
+
+(def new-ledger-calls
+  {:lifecycle/before-task-start inject-new-ledger
+   :lifecycle/after-task-stop close-new-ledger-resources})
