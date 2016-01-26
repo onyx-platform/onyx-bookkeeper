@@ -295,11 +295,13 @@
                           shutdown-ch)))
 
 (defn read-handle-exception [event lifecycle lf-kw exception]
-  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
-        :restart
-        (= exception org.apache.bookkeeper.client.BKException$ZKException)
-        :restart
-        :else :defer))
+  (let [exception-type (type exception)] 
+    (case exception-type 
+      org.apache.zookeeper.KeeperException$ConnectionLossException
+      :restart
+      org.apache.bookkeeper.client.BKException$ZKException
+      :restart
+      :defer)))
 
 (def read-ledgers-calls
   {:lifecycle/before-task-start inject-read-ledgers-resources
@@ -321,11 +323,13 @@
   {})
 
 (defn write-handle-exception [event lifecycle lf-kw exception]
-  (cond (= exception org.apache.zookeeper.KeeperException$ConnectionLossException)
-        :restart
-        (= exception org.apache.bookkeeper.client.BKException$ZKException)
-        :restart
-        :else :defer))
+  (let [exception-type (type exception)] 
+    (case exception-type 
+      org.apache.zookeeper.KeeperException$ConnectionLossException
+      :restart
+      org.apache.bookkeeper.client.BKException$ZKException
+      :restart
+      :defer)))
 
 (def write-ledger-calls
   {:lifecycle/before-task-start inject-write-ledger-resources
