@@ -28,7 +28,7 @@
                              (when (= 2 (swap! batch-num inc))
                                (Thread/sleep 3000) 
                                (throw (ex-info "Restartable" {:restartable? true}))))
-   :lifecycle/handle-exception (constantly true)})
+   :lifecycle/handle-exception (constantly :restart)})
 
 (deftest input-plugin
   (let [_ (reset! out-chan (chan 1000))
