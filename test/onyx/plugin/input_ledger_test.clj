@@ -19,9 +19,6 @@
 (def persist-calls
   {:lifecycle/before-task-start inject-persist-ch})
 
-(defn restartable? [e]
-  true)
-
 (def batch-num (atom 0))
 
 (def read-ledgers-crash
@@ -30,7 +27,8 @@
                              ;; the chunks out and ack the batches
                              (when (= 2 (swap! batch-num inc))
                                (Thread/sleep 3000) 
-                               (throw (ex-info "Restartable" {:restartable? true}))))})
+                               (throw (ex-info "Restartable" {:restartable? true}))))
+   :lifecycle/handle-exception (constantly :restart)})
 
 (deftest input-plugin
   (let [_ (reset! out-chan (chan 1000))
@@ -70,7 +68,6 @@
                     ;:checkpoint/key "global-checkpoint-key"
                     ;:checkpoint/force-reset? true
                     :bookkeeper/password-bytes (.getBytes "INSECUREDEFAULTPASSWORD")
-                    :onyx/restart-pred-fn ::restartable?
                     :onyx/max-peers 1
                     :onyx/batch-size batch-size
                     :onyx/doc "Reads from a BookKeeper ledger"}
