@@ -362,7 +362,7 @@
              (let [ack-fn (fn [] 
                             (when (dec-count! ack)
                               (when-let [site (peer-site peer-replica-view (:completion-id ack))]
-                                (extensions/internal-ack-segment messenger event site ack))))
+                                (extensions/internal-ack-segment messenger site ack))))
                    failed-reset-fn (fn [code] (reset! write-failed-code code))
                    callback-data {:ack-fn ack-fn :failed! failed-reset-fn}] 
                (run! (fn [leaf]
