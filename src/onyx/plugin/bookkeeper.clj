@@ -1,5 +1,5 @@
 (ns onyx.plugin.bookkeeper
-  (:require [clojure.core.async :refer [chan >! >!! <!! close! thread timeout alts!! go-loop sliding-buffer]]
+  (:require [clojure.core.async :refer [chan >! >!! <!! close! offer! poll! thread timeout alts!! go-loop sliding-buffer]]
             [schema.core :as s]
             [onyx.schema :as onyx-schema]
             [onyx.state.log.bookkeeper :as obk]
@@ -7,6 +7,7 @@
             [onyx.peer.function :as function]
             [onyx.types :as t]
             [onyx.static.default-vals :refer [defaults]]
+	    [clojure.core.async.impl.protocols :refer [closed?]]
             [onyx.log.zookeeper :as log-zk]
             [onyx.log.curator :as zk]
             [onyx.extensions :as extensions]
@@ -64,10 +65,12 @@
 
 (defn close-read-ledgers-resources
   [{:keys [bookkeeper/producer-ch bookkeeper/commit-ch bookkeeper/read-ch bookkeeper/shutdown-ch] :as event} lifecycle]
-  ;; Before we waited for producer ch to return. We should probably still do so by checking the shutdown-ch
   (close! shutdown-ch)
   (close! read-ch)
+  ;; Drain the read-ch to unblock the producer
+  (while (poll! read-ch))
   (close! commit-ch)
+  (<!! producer-ch)
   {})
 
 (defn set-starting-offset! [log task-map checkpoint-key start]
@@ -103,11 +106,14 @@
          ledger-entry (.nextElement entries)] 
     (let [segment {:entry-id (.getEntryId ^LedgerEntry ledger-entry) 
                    :ledger-id (.getId ledger-handle)
-                   :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))}] 
-      (>!! read-ch (t/input (random-uuid) segment))
-      (if (.hasMoreElements entries)
-        (recur entries 
-               (.nextElement entries))))))
+                   :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))}
+          put? (>!! read-ch (t/input (random-uuid) segment))]
+      (cond (not put?)
+            :closed
+            (not (.hasMoreElements entries))
+            :finished
+            :else
+            (recur entries (.nextElement entries))))))
 
 (def read-chunk-size 100)
 
@@ -121,9 +127,11 @@
             bounded-end (min ledger-end-id last-confirmed)
             chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))
             _ (info "Starting final read: " start ledger-end-id last-confirmed bounded-end (vec chunks))]
-        (run! (fn [[s e]]
-                (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
-              chunks))
+        (reduce (fn [r [s e]]
+                  (if (= :closed (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
+                    (reduced r)))
+                nil
+                chunks))
       (finally (.close ledger-handle)))))
 
 (defn no-recovery-read-ledger-entries! 
@@ -135,9 +143,11 @@
         bounded-end (min ledger-end-id last-confirmed)
         chunks (partition-all 2 1 (range (dec start) bounded-end read-chunk-size))]
     (try 
-      (run! (fn [[s e]]
-              (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
-            chunks)
+      (reduce (fn [r [s e]]
+                (if (= :closed (read-ledger-chunk! ledger-handle deserializer-fn read-ch (inc s) (or e bounded-end)))
+                  (reduced r)))
+              nil
+              chunks)
       (finally (.close ledger-handle)))
 
     (if (.isClosed client ledger-id)
@@ -229,6 +239,7 @@
                            (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
       (doseq [m batch]
         (let [message (:message m)]
+          (info "Read message in batch" message)
           (when (instance? java.lang.Throwable message)
             (throw message))
 
@@ -339,9 +350,12 @@
 (def HandleWriteCallback
   (reify AsyncCallback$AddCallback
     (addComplete [this rc lh entry-id ack]
-      (if (= rc (BKException$Code/OK))
-        ((:ack-fn ack))
-        ((:failed! ack) rc)))))
+      (try 
+        (if (= rc (BKException$Code/OK))
+          ((:ack-fn ack))
+          ((:failed! ack) rc))
+        (catch Throwable t
+          (error t))))))
 
 (defrecord BookKeeperWriteLedger [client ledger-handle serializer-fn write-failed-code]
   p-ext/Pipeline
