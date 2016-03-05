@@ -171,7 +171,7 @@
         (-> task-map 
             (default-value :bookkeeper/read-max-chunk-size 1000)
             (default-value :onyx/batch-timeout (:onyx/batch-timeout defaults))
-            (default-value :bookkeeper/zookeeper-ledgers-root-path (log-zk/ledgers-path (:onyx/id peer-opts)))
+            (default-value :bookkeeper/zookeeper-ledgers-root-path (log-zk/ledgers-path (:onyx/tenancy-id peer-opts)))
             (default-value :bookkeeper/ledger-start-id 0)
             (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
             (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
@@ -416,7 +416,7 @@
 
 (defn write-ledger [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as pipeline-data}]
   (validate-task-map! task-map BookKeeperOutput)
-  (let [onyx-id (:onyx/id peer-opts)
+  (let [onyx-id (:onyx/tenancy-id peer-opts)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
                               (log-zk/ledgers-path onyx-id))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
@@ -442,7 +442,7 @@
 
 (defn inject-new-ledger
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as event} lifecycle]
-  (let [onyx-id (:onyx/id peer-opts)
+  (let [onyx-id (:onyx/tenancy-id peer-opts)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path lifecycle)
                               (log-zk/ledgers-path onyx-id))
         zookeeper-addr (:bookkeeper/zookeeper-addr lifecycle)
