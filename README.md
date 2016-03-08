@@ -62,7 +62,7 @@ Task will emit a sentinel `:done` when it reaches the ledger-end-id, or the end 
 |`:bookkeeper/deserializer-fn` | `keyword` | Namespaced keyword pointing to deserialization function
 |`:bookkeeper/password-bytes`  | `bytes`   | Password to open the ledger
 |`:checkpoint/force-reset?`    | `boolean` | whether or not checkpointing should be re-initialised from log-start-tx, or 0 in the case of nil
-|`:checkpoint/key`             | `any`     | optional global (for a given onyx/id) key under which to store the checkpoint information. By default the task-id for the job will be used, in which case checkpointing will only be resumed when a virtual peer crashes, and not when a new job is started.
+|`:checkpoint/key`             | `any`     | optional global (for a given onyx/tenancy-id) key under which to store the checkpoint information. By default the task-id for the job will be used, in which case checkpointing will only be resumed when a virtual peer crashes, and not when a new job is started.
 |`:bookkeeper/read-buffer`     | `integer` | The number of segments to buffer after partitioning, default is `1000`
 |`:bookkeeper/read-max-chunk-size` | `integer` | optional chunk size to read from the ledger at a time
 

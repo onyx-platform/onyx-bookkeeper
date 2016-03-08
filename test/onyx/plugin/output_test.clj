@@ -33,14 +33,14 @@
                     :zookeeper.server/port 2188
                     :onyx.bookkeeper/server? true
                     :onyx.bookkeeper/local-quorum? true
-                    :onyx/id id}
+                    :onyx/tenancy-id id}
 
         peer-config {:zookeeper/address zk-addr
                      :onyx.peer/job-scheduler :onyx.job-scheduler/greedy
                      :onyx.messaging/impl :aeron
                      :onyx.messaging/peer-port 40199
                      :onyx.messaging/bind-addr "localhost"
-                     :onyx/id id}
+                     :onyx/tenancy-id id}
 
         workflow [[:in :identity]
                   [:identity :write-messages]]
