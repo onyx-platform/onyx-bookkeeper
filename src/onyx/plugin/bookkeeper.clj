@@ -386,7 +386,7 @@
                                        callback-data))
                      (:leaves result))))
            (map list (:tree results) (:acks results))))
-    {:onyx.core/written? true})
+    {:bookkeeper/written? true})
 
   (seal-resource
     [_ _]
