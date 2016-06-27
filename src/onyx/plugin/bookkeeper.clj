@@ -176,7 +176,7 @@
             (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
             (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
             (default-value :checkpoint/key task-id))
-        {:keys [read-ch shutdown-ch commit-ch]} pipeline
+        {:keys [read-ch shutdown-ch commit-ch error]} pipeline
         ;; decrement because we are going to store this as a checkpoint and then inc after recover
         checkpoint-key (:checkpoint/key defaulted-task-map)
         _ (set-starting-offset! log task-map checkpoint-key (dec ledger-start-id))
@@ -200,7 +200,7 @@
                           (if (= exit :finished)
                             (>!! read-ch (t/input (random-uuid) :done))))
                         (catch Exception e
-                          (>!! read-ch (t/input (random-uuid) e))
+                          (reset! error e)
                           (fatal e "BookKeeper plugin: error reading."))))]
     {:bookkeeper/read-ch read-ch
      :bookkeeper/shutdown-ch shutdown-ch
@@ -222,7 +222,7 @@
 
 (defrecord BookKeeperLogInput
   [log task-id max-pending batch-size batch-timeout pending-messages drained?
-   top-index top-acked-index pending-indexes read-ch commit-ch shutdown-ch]
+   top-index top-acked-index pending-indexes error read-ch commit-ch shutdown-ch]
   p-ext/Pipeline
   (write-batch
     [this event]
@@ -230,6 +230,8 @@
 
   (read-batch
     [_ event]
+    (when @error
+      (throw @error))
     (let [pending (count @pending-messages)
           max-segments (min (- max-pending pending) batch-size)
           timeout-ch (timeout batch-timeout)
@@ -240,8 +242,6 @@
       (doseq [m batch]
         (let [message (:message m)]
           (info "Read message in batch" message)
-          (when (instance? java.lang.Throwable message)
-            (throw message))
 
           (when-not (= message :done)
             (swap! top-index max (:entry-id message))
@@ -287,6 +287,7 @@
         batch-size (:onyx/batch-size task-map)
         batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
         read-ch (chan (or (:bookkeeper/read-buffer task-map) 1000))
+        error (atom nil)
         commit-ch (chan (sliding-buffer 1))
         shutdown-ch (chan 1)
         top-id (atom -1)
@@ -301,6 +302,7 @@
                           top-id
                           top-acked-id
                           pending-indexes
+                          error
                           read-ch
                           commit-ch
                           shutdown-ch)))
