@@ -17,7 +17,7 @@
             [onyx.static.uuid :refer [random-uuid]]
             [onyx.peer.operation :refer [kw->fn]]
             [onyx.types :refer [dec-count! inc-count!]]
-            [taoensso.timbre :refer [info error debug fatal]])
+            [taoensso.timbre :refer [info warn error trace debug fatal]])
   (:import [org.apache.zookeeper KeeperException$BadVersionException KeeperException$ConnectionLossException]
            [org.apache.bookkeeper.client 
             LedgerHandle LedgerEntry BookKeeper BKException$Code BKException$ZKException BookKeeper$DigestType AsyncCallback$AddCallback]))
@@ -65,12 +65,15 @@
 
 (defn close-read-ledgers-resources
   [{:keys [bookkeeper/producer-ch bookkeeper/commit-ch bookkeeper/read-ch bookkeeper/shutdown-ch] :as event} lifecycle]
+  (info "Closing read ledger resources:" (:onyx.core/task event))
   (close! shutdown-ch)
   (close! read-ch)
   ;; Drain the read-ch to unblock the producer
   (while (poll! read-ch))
   (close! commit-ch)
-  (<!! producer-ch)
+  (let [timeout-ms 15000] 
+    (when-not (= producer-ch (second (alts!! [producer-ch (timeout timeout-ms)])))
+      (warn (format "Timed out after %s ms waiting for BookKeeper plugin producer thread to finish." timeout-ms))))
   {})
 
 (defn set-starting-offset! [log task-map checkpoint-key start]
@@ -166,6 +169,8 @@
   (when-not (:bookkeeper/password-bytes task-map)
     (throw (Exception. ":bookkeeper/password-bytes must be supplied")))
 
+  (info "Inject read ledger resources:" (:onyx.core/task event))
+
   (let [{:keys [bookkeeper/ledger-start-id bookkeeper/ledger-end-id bookkeeper/zookeeper-ledgers-root-path
                 bookkeeper/zookeeper-addr bookkeeper/deserializer-fn bookkeeper/no-recovery?] :as defaulted-task-map} 
         (-> task-map 
@@ -222,7 +227,7 @@
 
 (defrecord BookKeeperLogInput
   [log task-id max-pending batch-size batch-timeout pending-messages drained?
-   top-index top-acked-index pending-indexes error read-ch commit-ch shutdown-ch]
+   top-index top-acked-index pending-indexes error retry-ch read-ch commit-ch shutdown-ch]
   p-ext/Pipeline
   (write-batch
     [this event]
@@ -238,11 +243,10 @@
           batch (if (zero? max-segments) 
                       (<!! timeout-ch)
                       (->> (range max-segments)
-                           (keep (fn [_] (first (alts!! [read-ch timeout-ch] :priority true))))))]
+                           (keep (fn [_] (first (alts!! [retry-ch read-ch timeout-ch] :priority true))))))]
       (doseq [m batch]
         (let [message (:message m)]
-          (info "Read message in batch" message)
-
+          (trace "Read message in batch" task-id message)
           (when-not (= message :done)
             (swap! top-index max (:entry-id message))
             (swap! pending-indexes conj (:entry-id message))))
@@ -271,7 +275,7 @@
   (retry-segment
     [_ event segment-id]
     (when-let [msg (get @pending-messages segment-id)]
-      (>!! read-ch (assoc msg :id (random-uuid))))
+      (>!! retry-ch (assoc msg :id (random-uuid))))
     (swap! pending-messages dissoc segment-id))
 
   (pending?
@@ -287,6 +291,7 @@
         batch-size (:onyx/batch-size task-map)
         batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
         read-ch (chan (or (:bookkeeper/read-buffer task-map) 1000))
+        retry-ch (chan max-pending)
         error (atom nil)
         commit-ch (chan (sliding-buffer 1))
         shutdown-ch (chan 1)
@@ -303,6 +308,7 @@
                           top-acked-id
                           pending-indexes
                           error
+                          retry-ch
                           read-ch
                           commit-ch
                           shutdown-ch)))
