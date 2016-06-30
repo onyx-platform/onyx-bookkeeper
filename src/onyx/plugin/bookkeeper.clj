@@ -64,12 +64,14 @@
 ;; read BookKeeper log plugin
 
 (defn close-read-ledgers-resources
-  [{:keys [bookkeeper/producer-ch bookkeeper/commit-ch bookkeeper/read-ch bookkeeper/shutdown-ch] :as event} lifecycle]
+  [{:keys [bookkeeper/producer-ch bookkeeper/commit-ch bookkeeper/read-ch bookkeeper/retry-ch bookkeeper/shutdown-ch] :as event} lifecycle]
   (info "Closing read ledger resources:" (:onyx.core/task event))
   (close! shutdown-ch)
   (close! read-ch)
+  (close! retry-ch)
   ;; Drain the read-ch to unblock the producer
   (while (poll! read-ch))
+  (while (poll! retry-ch))
   (close! commit-ch)
   (let [timeout-ms 15000] 
     (when-not (= producer-ch (second (alts!! [producer-ch (timeout timeout-ms)])))
@@ -181,7 +183,7 @@
             (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
             (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
             (default-value :checkpoint/key task-id))
-        {:keys [read-ch shutdown-ch commit-ch error]} pipeline
+        {:keys [read-ch shutdown-ch retry-ch commit-ch error]} pipeline
         ;; decrement because we are going to store this as a checkpoint and then inc after recover
         checkpoint-key (:checkpoint/key defaulted-task-map)
         _ (set-starting-offset! log task-map checkpoint-key (dec ledger-start-id))
@@ -208,6 +210,7 @@
                           (reset! error e)
                           (fatal e "BookKeeper plugin: error reading."))))]
     {:bookkeeper/read-ch read-ch
+     :bookkeeper/retry-ch retry-ch
      :bookkeeper/shutdown-ch shutdown-ch
      :bookkeeper/commit-ch commit-ch
      :bookkeeper/producer-ch producer-ch
@@ -255,6 +258,7 @@
                  (all-done? batch)
                  (or (not (empty? @pending-messages))
                      (not (empty? batch)))
+                 (zero? (count (.buf retry-ch)))
                  (zero? (count (.buf read-ch))))
         (when-not (:checkpoint/key (:onyx.core/task-map event))
           (>!! commit-ch {:status :complete}))
@@ -291,7 +295,7 @@
         batch-size (:onyx/batch-size task-map)
         batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
         read-ch (chan (or (:bookkeeper/read-buffer task-map) 1000))
-        retry-ch (chan max-pending)
+        retry-ch (chan (* 2 max-pending))
         error (atom nil)
         commit-ch (chan (sliding-buffer 1))
         shutdown-ch (chan 1)
