@@ -96,8 +96,7 @@
 
             _ (onyx.api/await-job-completion peer-config (:job-id job))
             job-id (:job-id job)
-            task-id (get-in (:task-ids job) [:write-messages :id])
-            ledger-ids (read-ledgers-data (:log (:env env)) id job-id task-id)]
+            output (read-ledgers-data (:log (:env env)) id job-id :write-messages)]
         (is (= input-values 
                (sort-by :a 
                         (mapcat (fn [ledger-id] 
@@ -117,4 +116,4 @@
                                         (if (.hasMoreElements entries)
                                           (recur new-entries (.nextElement entries))
                                           new-entries)))))
-                                ledger-ids)))))))) 
+                                output))))))))
