@@ -165,7 +165,7 @@
   (update task-map k (fn [curr] (or curr v))))
 
 (defn inject-read-ledgers-resources
-  [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
+  [{:keys [onyx.core/task-map onyx.core/log onyx.core/job-id onyx.core/task-id onyx.core/pipeline onyx.core/peer-opts] :as event} lifecycle]
   (when-not (= 1 (:onyx/max-peers task-map))
     (throw (ex-info "Read log tasks must set :onyx/max-peers 1" task-map)))
   (when-not (:bookkeeper/password-bytes task-map)
@@ -182,7 +182,7 @@
             (default-value :bookkeeper/ledger-start-id 0)
             (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
             (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
-            (default-value :checkpoint/key task-id))
+            (default-value :checkpoint/key (str job-id "#" task-id)))
         {:keys [read-ch shutdown-ch retry-ch commit-ch error]} pipeline
         ;; decrement because we are going to store this as a checkpoint and then inc after recover
         checkpoint-key (:checkpoint/key defaulted-task-map)
