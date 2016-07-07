@@ -49,7 +49,7 @@
                    :onyx/tenancy-id id}
       batch-size 3]
   (with-test-env [env [3 env-config peer-config]]
-    (let [ledgers-root-path (zk/ledgers-path id)
+    (let [ledgers-root-path "/ledgers"
           client (obk/bookkeeper zk-addr ledgers-root-path 60000 30000)
           ledger-handle (obk/new-ledger client env-config)
           workflow [[:read-ledgers :persist]]

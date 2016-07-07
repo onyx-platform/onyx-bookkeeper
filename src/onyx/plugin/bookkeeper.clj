@@ -174,11 +174,11 @@
   (info "Inject read ledger resources:" (:onyx.core/task event))
 
   (let [{:keys [bookkeeper/ledger-start-id bookkeeper/ledger-end-id bookkeeper/zookeeper-ledgers-root-path
-                bookkeeper/zookeeper-addr bookkeeper/deserializer-fn bookkeeper/no-recovery?] :as defaulted-task-map} 
-        (-> task-map 
+                bookkeeper/zookeeper-addr bookkeeper/deserializer-fn bookkeeper/no-recovery?] :as defaulted-task-map}
+        (-> task-map
             (default-value :bookkeeper/read-max-chunk-size 1000)
             (default-value :onyx/batch-timeout (:onyx/batch-timeout defaults))
-            (default-value :bookkeeper/zookeeper-ledgers-root-path (log-zk/ledgers-path (:onyx/tenancy-id peer-opts)))
+            (default-value :bookkeeper/zookeeper-ledgers-root-path (:onyx.bookkeeper/zk-ledgers-root-path defaults))
             (default-value :bookkeeper/ledger-start-id 0)
             (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
             (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
@@ -243,7 +243,7 @@
     (let [pending (count @pending-messages)
           max-segments (min (- max-pending pending) batch-size)
           timeout-ch (timeout batch-timeout)
-          batch (if (zero? max-segments) 
+          batch (if (zero? max-segments)
                       (<!! timeout-ch)
                       (->> (range max-segments)
                            (keep (fn [_] (first (alts!! [retry-ch read-ch timeout-ch] :priority true))))))]
@@ -430,7 +430,7 @@
   (validate-task-map! task-map BookKeeperOutput)
   (let [onyx-id (:onyx/tenancy-id peer-opts)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
-                              (log-zk/ledgers-path onyx-id))
+                              (:onyx.bookkeeper/zk-ledgers-root-path defaults))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         ;; FIXME, parameterize these in the task-map
         zookeeper-timeout 60000
@@ -456,7 +456,7 @@
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as event} lifecycle]
   (let [onyx-id (:onyx/tenancy-id peer-opts)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path lifecycle)
-                              (log-zk/ledgers-path onyx-id))
+                              (:onyx.bookkeeper/zk-ledgers-root-path defaults))
         zookeeper-addr (:bookkeeper/zookeeper-addr lifecycle)
         ;; FIXME, parameterize these in the lifecycle
         zookeeper-timeout 60000

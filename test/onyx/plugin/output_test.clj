@@ -92,16 +92,16 @@
 
             _ (doseq [v input-values]
                 (>!! @in-chan v))
-            _ (>!! @in-chan :done) 
+            _ (>!! @in-chan :done)
 
             _ (onyx.api/await-job-completion peer-config (:job-id job))
             job-id (:job-id job)
             output (read-ledgers-data (:log (:env env)) id job-id :write-messages)]
-        (is (= input-values 
-               (sort-by :a 
-                        (mapcat (fn [ledger-id] 
+        (is (= input-values
+               (sort-by :a
+                        (mapcat (fn [ledger-id]
                                   (let [digest BookKeeper$DigestType/MAC
-                                        ledgers-root-path (zk/ledgers-path id)
+                                        ledgers-root-path "/ledgers"
                                         zookeeper-timeout 60000
                                         bookkeeper-throttle 30000
                                         client (obk/bookkeeper zk-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
