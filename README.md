@@ -7,7 +7,7 @@ Onyx plugin providing read and write facilities for BookKeeper ledgers
 In your project file:
 
 ```clojure
-[org.onyxplatform/onyx-bookkeeper "0.9.8.0-SNAPSHOT"]
+[org.onyxplatform/onyx-bookkeeper "0.9.8.0"]
 ```
 In your peer boot-up namespace:
 
