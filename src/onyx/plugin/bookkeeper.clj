@@ -6,7 +6,7 @@
             [onyx.peer.pipeline-extensions :as p-ext]
             [onyx.peer.function :as function]
             [onyx.types :as t]
-            [onyx.static.default-vals :refer [defaults]]
+            [onyx.static.default-vals :refer [default-vals]]
 	    [clojure.core.async.impl.protocols :refer [closed?]]
             [onyx.log.zookeeper :as log-zk]
             [onyx.log.curator :as zk]
@@ -177,8 +177,8 @@
                 bookkeeper/zookeeper-addr bookkeeper/deserializer-fn bookkeeper/no-recovery?] :as defaulted-task-map}
         (-> task-map
             (default-value :bookkeeper/read-max-chunk-size 1000)
-            (default-value :onyx/batch-timeout (:onyx/batch-timeout defaults))
-            (default-value :bookkeeper/zookeeper-ledgers-root-path (:onyx.bookkeeper/zk-ledgers-root-path defaults))
+            (default-value :onyx/batch-timeout (:onyx/batch-timeout default-vals))
+            (default-value :bookkeeper/zookeeper-ledgers-root-path (:onyx.bookkeeper/zk-ledgers-root-path default-vals))
             (default-value :bookkeeper/ledger-start-id 0)
             (default-value :bookkeeper/ledger-end-id Double/POSITIVE_INFINITY)
             (default-value :bookkeeper/no-recovery-empty-read-back-off 500)
@@ -291,9 +291,9 @@
     @drained?))
 
 (defn read-ledgers [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id] :as pipeline-data}]
-  (let [max-pending (or (:onyx/max-pending task-map) (:onyx/max-pending defaults))
+  (let [max-pending (or (:onyx/max-pending task-map) (:onyx/max-pending default-vals))
         batch-size (:onyx/batch-size task-map)
-        batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
+        batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout default-vals))
         read-ch (chan (or (:bookkeeper/read-buffer task-map) 1000))
         retry-ch (chan (* 2 max-pending))
         error (atom nil)
@@ -430,7 +430,7 @@
   (validate-task-map! task-map BookKeeperOutput)
   (let [onyx-id (:onyx/tenancy-id peer-opts)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path task-map)
-                              (:onyx.bookkeeper/zk-ledgers-root-path defaults))
+                              (:onyx.bookkeeper/zk-ledgers-root-path default-vals))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         ;; FIXME, parameterize these in the task-map
         zookeeper-timeout 60000
@@ -456,7 +456,7 @@
   [{:keys [onyx.core/task-map onyx.core/log onyx.core/peer-opts onyx.core/task-id onyx.core/job-id] :as event} lifecycle]
   (let [onyx-id (:onyx/tenancy-id peer-opts)
         ledgers-root-path (or (:bookkeeper/zookeeper-ledgers-root-path lifecycle)
-                              (:onyx.bookkeeper/zk-ledgers-root-path defaults))
+                              (:onyx.bookkeeper/zk-ledgers-root-path default-vals))
         zookeeper-addr (:bookkeeper/zookeeper-addr lifecycle)
         ;; FIXME, parameterize these in the lifecycle
         zookeeper-timeout 60000
