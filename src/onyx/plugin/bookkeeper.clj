@@ -7,7 +7,7 @@
             [onyx.peer.function :as function]
             [onyx.types :as t]
             [onyx.static.default-vals :refer [default-vals]]
-	    [clojure.core.async.impl.protocols :refer [closed?]]
+            [clojure.core.async.impl.protocols :refer [closed?]]
             [onyx.log.zookeeper :as log-zk]
             [onyx.log.curator :as zk]
             [onyx.extensions :as extensions]
@@ -15,7 +15,7 @@
             [onyx.compression.nippy :refer [zookeeper-compress zookeeper-decompress]]
             [onyx.log.commands.peer-replica-view :refer [peer-site]]
             [onyx.static.uuid :refer [random-uuid]]
-            [onyx.peer.operation :refer [kw->fn]]
+            [onyx.static.util :refer [kw->fn]]
             [onyx.types :refer [dec-count! inc-count!]]
             [taoensso.timbre :refer [info warn error trace debug fatal]])
   (:import [org.apache.zookeeper KeeperException$BadVersionException KeeperException$ConnectionLossException]
