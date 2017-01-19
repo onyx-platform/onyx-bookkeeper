@@ -12,6 +12,8 @@
                              :password :env
                              :sign-releases false}}
   :dependencies [[org.clojure/clojure "1.7.0"]
+                 [org.apache.bookkeeper/bookkeeper-server "4.4.0" :exclusions [org.slf4j/slf4j-log4j12]]
+                 ;[org.apache.bookkeeper/bookkeeper "4.4.0" :exclusions [org.slf4j/slf4j-log4j12]]
                  ^{:voom {:repo "git@github.com:onyx-platform/onyx.git" :branch "master"}}
                  [org.onyxplatform/onyx "0.9.15"]]
   :profiles {:dev {:plugins [[lein-set-version "0.4.1"]
