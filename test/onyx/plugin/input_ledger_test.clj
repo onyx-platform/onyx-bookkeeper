@@ -57,7 +57,6 @@
                            :onyx.bookkeeper/server? true 
                            :onyx.bookkeeper/delete-server-data? true
                            :onyx.bookkeeper/local-quorum? true)
-          ;munti-bookie-server (component/start (bkserver/new-bookie-monitor bk-config log))
           multi-bookie-server (component/start (bkserver/multi-bookie-server bk-config log))] 
       (try 
        (let [ledgers-root-path "/ledgers"
@@ -66,8 +65,6 @@
              workflow [[:read-ledgers :persist]]
              start (rand-int 100)
              end (+ start (rand-int 50))
-             _ (println "START " start)
-             _ (println "END " end)
              n-entries (inc end)
              live-read? (first (shuffle [true false]))
              catalog [{:onyx/name :read-ledgers
@@ -81,6 +78,7 @@
                        :bookkeeper/deserializer-fn :onyx.compression.nippy/zookeeper-decompress
                        :bookkeeper/ledger-start-id start
                        :bookkeeper/ledger-end-id end
+                       :bookkeeper/read-max-chunk-size (inc (rand-int 100))
                        :bookkeeper/no-recovery? live-read?
                        :bookkeeper/password-bytes (.getBytes "INSECUREDEFAULTPASSWORD")
                        :onyx/max-peers 1
@@ -103,20 +101,24 @@
                          {:lifecycle/task :persist
                           :lifecycle/calls :onyx.plugin.core-async/writer-calls}]
              entries (mapv (fn [v]
-                             {:value (+ 50 v) :random (rand-int 10)})
+                             {:value v :random (rand-int 10)})
                            (range n-entries))
              _ (doseq [v entries]
                  (.addEntry ledger-handle (nippy/zookeeper-compress v)))
-             _ (when-not live-read? (.close ledger-handle))
+             _ (when-not live-read? 
+                 (.close ledger-handle))
              job-id (:job-id (onyx.api/submit-job
                               peer-config
                               {:catalog catalog :workflow workflow :lifecycles lifecycles
                                :task-scheduler :onyx.task-scheduler/balanced}))
+             _ (future
+                (Thread/sleep 5000)
+                (when live-read?
+                  (.close ledger-handle)))
              _ (onyx.test-helper/feedback-exception! peer-config job-id)
              results (take-segments! @out-chan 50)]
-         (println "RESULTS" results)
-         (when-not live-read? (.close ledger-handle))
-         (is (= (take (- end start) (drop start entries)) 
+         ;; When live reading we can close the ledger after we've been reading
+         (is (= (take (inc (- end start)) (drop start entries)) 
                 (sort-by :value (map :value results)))))
        (finally
         (component/stop multi-bookie-server))))))) 
