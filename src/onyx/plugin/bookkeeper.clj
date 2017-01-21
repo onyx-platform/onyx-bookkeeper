@@ -85,7 +85,9 @@
    batch-timeout                                              deserializer-fn
    ^:unsynchronized-mutable client   ^:unsynchronized-mutable ledger-handle
    ^:unsynchronized-mutable digest   ^:unsynchronized-mutable entries 
-   ^:unsynchronized-mutable offset   ^:unsynchronized-mutable drained]
+   ^:unsynchronized-mutable offset   ^:unsynchronized-mutable drained
+   ^:unsynchronized-mutable final-open
+   ]
   p/Plugin
   (start [this {:keys [onyx.core/log onyx.core/job-id onyx.core/task-id onyx.core/peer-opts] :as event}] 
     (let [task-map* (:onyx.core/task-map event)
@@ -122,6 +124,7 @@
     offset)
 
   (recover! [this replica-version checkpoint]
+    (println "RECOVER FROM CHECKPOINT" checkpoint)
     (set! drained false)
     (set! offset (or checkpoint (:bookkeeper/ledger-start-id task-map)))
     this)
@@ -136,6 +139,7 @@
           (let [ledger-entry (.nextElement entries)
                 entry-id (.getEntryId ^LedgerEntry ledger-entry)]
             (set! offset (inc entry-id))
+            (println "READ ENTRY" entry-id)
             {:entry-id entry-id
              :ledger-id (.getId ledger-handle)
              :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))})
@@ -146,7 +150,10 @@
           :else
           (let [no-recovery? (:bookkeeper/no-recovery? task-map)
                 _ (when-not ledger-handle
-                    (let [f (if no-recovery? open-ledger-no-recovery open-ledger)] 
+                    ;; FIXME
+                    (let [f (if (and no-recovery? (not (.isClosed client (:bookkeeper/ledger-id task-map)))) 
+                              open-ledger-no-recovery 
+                              open-ledger)] 
                       (set! ledger-handle
                             (f client 
                                (:bookkeeper/ledger-id task-map) 
@@ -165,6 +172,14 @@
                    (set! drained true)
                    (set! entries nil))
 
+                  (and (.isClosed client (:bookkeeper/ledger-id task-map))
+                       (not final-open))
+                  (do
+                   (set! final-open true)
+                   (.close ledger-handle)
+                   (set! ledger-handle nil)
+                   (set! entries nil))
+
                   ;; Unable to get the last confirmed
                   (or (neg? last-confirmed)
                       (> offset last-confirmed))
@@ -176,7 +191,8 @@
 
                   :else
                   (do
-                   (info "Call readEntries, last confirmed" last-confirmed "start" offset "end" (min (+ chunk-size offset) ledger-end-id))
+                   (debug "Call readEntries, last confirmed" last-confirmed "start" offset "end" 
+                          (min (+ chunk-size offset) ledger-end-id))
                    (set! entries (.readEntries ledger-handle 
                                                offset
                                                (min (+ chunk-size offset) 
@@ -200,6 +216,7 @@
                           nil
                           nil
                           nil
+                          false
                           false)))
 
 (defn read-handle-exception [event lifecycle lf-kw exception]

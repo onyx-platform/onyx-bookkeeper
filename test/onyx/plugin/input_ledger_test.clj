@@ -24,16 +24,11 @@
 (def batch-num (atom 0))
 
 (def read-ledgers-crash
-  {:lifecycle/before-batch (fn [event lifecycle]
-                             ; give the peer a bit of time to write
-                             ;; the chunks out and ack the batches
-                             #_(when (= 2 (swap! batch-num inc))
-                               (Thread/sleep 3000) 
-                               (throw (ex-info "Restartable" {:restartable? true}))))
-   :lifecycle/handle-exception (constantly :restart)})
+  {:lifecycle/handle-exception (constantly :restart)})
 
 (deftest input-plugin
-  (let [_ (reset! out-chan (chan 1000))
+  (dotimes [i 1] 
+    (let [_ (reset! out-chan (chan 1000))
       id (java.util.UUID/randomUUID)
       zk-addr "127.0.0.1:2188"
       env-config {:zookeeper/address zk-addr
@@ -66,7 +61,6 @@
              start (rand-int 100)
              end (+ start (rand-int 50))
              n-entries (inc end)
-             live-read? (first (shuffle [true false]))
              catalog [{:onyx/name :read-ledgers
                        :onyx/plugin :onyx.plugin.bookkeeper/read-ledgers
                        :onyx/type :input
@@ -79,7 +73,7 @@
                        :bookkeeper/ledger-start-id start
                        :bookkeeper/ledger-end-id end
                        :bookkeeper/read-max-chunk-size (inc (rand-int 100))
-                       :bookkeeper/no-recovery? live-read?
+                       :bookkeeper/no-recovery? false
                        :bookkeeper/password-bytes (.getBytes "INSECUREDEFAULTPASSWORD")
                        :onyx/max-peers 1
                        :onyx/batch-size batch-size
@@ -105,20 +99,15 @@
                            (range n-entries))
              _ (doseq [v entries]
                  (.addEntry ledger-handle (nippy/zookeeper-compress v)))
-             _ (when-not live-read? 
-                 (.close ledger-handle))
+             _ (.close ledger-handle)
              job-id (:job-id (onyx.api/submit-job
                               peer-config
                               {:catalog catalog :workflow workflow :lifecycles lifecycles
                                :task-scheduler :onyx.task-scheduler/balanced}))
-             _ (future
-                (Thread/sleep 5000)
-                (when live-read?
-                  (.close ledger-handle)))
              _ (onyx.test-helper/feedback-exception! peer-config job-id)
              results (take-segments! @out-chan 50)]
          ;; When live reading we can close the ledger after we've been reading
          (is (= (take (inc (- end start)) (drop start entries)) 
                 (sort-by :value (map :value results)))))
        (finally
-        (component/stop multi-bookie-server))))))) 
+        (component/stop multi-bookie-server)))))))) 
