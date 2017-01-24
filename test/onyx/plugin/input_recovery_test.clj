@@ -25,6 +25,11 @@
 
 (def start-time (atom nil))
 
+(def test-state (atom []))
+
+(defn update-atom! [event window trigger {:keys [lower-bound upper-bound event-type] :as state-event} extent-state]
+  (reset! test-state extent-state))
+
 (def read-ledgers-crash
   {:lifecycle/before-batch (fn [event lifecycle]
                              ; give the peer a bit of time to write
@@ -103,6 +108,17 @@
                               :lifecycle/calls ::persist-calls}
                              {:lifecycle/task :persist
                               :lifecycle/calls :onyx.plugin.core-async/writer-calls}]
+
+                 windows [{:window/id :collect-segments
+                           :window/task :read-ledgers
+                           :window/type :global
+                           :window/aggregation :onyx.windowing.aggregation/conj}]
+                 triggers [{:trigger/window-id :collect-segments
+                            :trigger/refinement :onyx.refinements/accumulating
+                            :trigger/fire-all-extents? true
+                            :trigger/on :onyx.triggers/segment
+                            :trigger/threshold [1 :elements]
+                            :trigger/sync ::update-atom!}]
                  entries (mapv (fn [v]
                                  {:value v :random (rand-int 10)})
                                (range n-entries))
@@ -113,9 +129,10 @@
                  job-id (:job-id (onyx.api/submit-job
                                   peer-config
                                   {:catalog catalog :workflow workflow :lifecycles lifecycles
+                                   :windows windows :triggers triggers
                                    :task-scheduler :onyx.task-scheduler/balanced}))
                  _ (future
-                    (Thread/sleep 5000)
+                    (Thread/sleep 10000)
                     ;; Write rest
                     (doseq [v (drop 10 entries)]
                       (.addEntry ledger-handle (nippy/zookeeper-compress v)))
@@ -124,6 +141,6 @@
                  results (take-segments! @out-chan 50)]
              ;; When live reading we can close the ledger after we've been reading
              (is (= (take (inc (- end start)) (drop start entries)) 
-                    (sort-by :value (map :value results)))))
+                    (map :value @test-state))))
            (finally
             (component/stop multi-bookie-server)))))))) 

@@ -75,10 +75,10 @@
                        :bookkeeper/ledger-end-id end-id
                        :checkpointed-id checkpoint-id})))))
 
-(def read-chunk-size 100)
-
 (defn default-value [task-map k v]
   (update task-map k (fn [curr] (or curr v))))
+
+(def zookeeper-timeout 20000)
 
 (deftype BookKeeperLogInput 
   [log-prefix                        ^:unsynchronized-mutable task-map 
@@ -86,8 +86,7 @@
    ^:unsynchronized-mutable client   ^:unsynchronized-mutable ledger-handle
    ^:unsynchronized-mutable digest   ^:unsynchronized-mutable entries 
    ^:unsynchronized-mutable offset   ^:unsynchronized-mutable drained
-   ^:unsynchronized-mutable final-open
-   ]
+   ^:unsynchronized-mutable final-open]
   p/Plugin
   (start [this {:keys [onyx.core/log onyx.core/job-id onyx.core/task-id onyx.core/peer-opts] :as event}] 
     (let [task-map* (:onyx.core/task-map event)
@@ -105,7 +104,6 @@
           {:keys [bookkeeper/ledger-start-id bookkeeper/ledger-end-id bookkeeper/zookeeper-ledgers-root-path
                   bookkeeper/zookeeper-addr bookkeeper/no-recovery?]} defaulted-task-map
           ;_ (validate-within-supplied-bounds (dec ledger-start-id) ledger-end-id (:largest checkpointed))
-          zookeeper-timeout 60000
           bookkeeper-throttle 30000
           digest* (digest-type (:bookkeeper/digest-type defaulted-task-map))]
       (set! client (bookkeeper zookeeper-addr zookeeper-ledgers-root-path zookeeper-timeout bookkeeper-throttle))
@@ -138,12 +136,13 @@
   (poll! [this _]
     (cond (and entries (.hasMoreElements entries))
           (let [ledger-entry (.nextElement entries)
-                entry-id (.getEntryId ^LedgerEntry ledger-entry)]
+                entry-id (.getEntryId ^LedgerEntry ledger-entry)
+                entry {:entry-id entry-id
+                       :ledger-id (.getId ledger-handle)
+                       :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))}]
             (set! offset (inc entry-id))
-            (println "READ ENTRY" entry-id)
-            {:entry-id entry-id
-             :ledger-id (.getId ledger-handle)
-             :value (deserializer-fn (.getEntry ^LedgerEntry ledger-entry))})
+            (info "Read entry:" entry)
+            entry)
 
           drained
           nil
@@ -161,19 +160,26 @@
                                digest 
                                (:bookkeeper/password-bytes task-map)))))
                 chunk-size (:bookkeeper/read-max-chunk-size task-map)
+                chunk-size 1
+                ;; too many isClosed checks
+                ;; should only check is closed when we have done an empty read
+                ledger-closed? (.isClosed client (:bookkeeper/ledger-id task-map))
                 last-confirmed (if no-recovery? 
                                  (.readLastConfirmed ledger-handle)
                                  (.getLastAddConfirmed ledger-handle))
-                chunk-size 1
                 ledger-end-id (min last-confirmed (:bookkeeper/ledger-end-id task-map))]
-            (cond (> offset (:bookkeeper/ledger-end-id task-map))
+            ;; should this throw if ledger is closed before ledger-end-id?
+            (cond (or (> offset (:bookkeeper/ledger-end-id task-map))
+                      (and (> offset last-confirmed)
+                           final-open
+                           ledger-closed?))
                   (do 
                    (.close ledger-handle)
                    (set! ledger-handle nil)
                    (set! drained true)
                    (set! entries nil))
 
-                  (and (.isClosed client (:bookkeeper/ledger-id task-map))
+                  (and ledger-closed? 
                        (not final-open))
                   (do
                    (set! final-open true)
@@ -346,8 +352,8 @@
                               (:onyx.bookkeeper/zk-ledgers-root-path default-vals))
         zookeeper-addr (:bookkeeper/zookeeper-addr task-map)
         ;; FIXME, parameterize these in the task-map
-        zookeeper-timeout 60000
         bookkeeper-throttle 30000
+        _ (info "Write ledger, connecting to BookKeeper.")
         client (bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         serializer-fn (kw->fn (:bookkeeper/serializer-fn task-map))
         digest (digest-type (:bookkeeper/digest-type task-map))
@@ -373,8 +379,8 @@
                               (:onyx.bookkeeper/zk-ledgers-root-path default-vals))
         zookeeper-addr (:bookkeeper/zookeeper-addr lifecycle)
         ;; FIXME, parameterize these in the lifecycle
-        zookeeper-timeout 60000
         bookkeeper-throttle 30000
+        _ (info "Write ledger, connecting to BookKeeper.")
         client (bookkeeper zookeeper-addr ledgers-root-path zookeeper-timeout bookkeeper-throttle)
         serializer-fn (kw->fn (:bookkeeper/serializer-fn lifecycle))
         digest (digest-type (:bookkeeper/digest-type lifecycle))

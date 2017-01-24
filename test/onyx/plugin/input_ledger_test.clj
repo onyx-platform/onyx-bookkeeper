@@ -71,8 +71,9 @@
                        :bookkeeper/digest-type :mac
                        :bookkeeper/deserializer-fn :onyx.compression.nippy/zookeeper-decompress
                        :bookkeeper/ledger-start-id start
-                       :bookkeeper/ledger-end-id end
+                       :bookkeeper/ledger-end-id end 
                        :bookkeeper/read-max-chunk-size (inc (rand-int 100))
+                       ;; FIXME rename to recovery?
                        :bookkeeper/no-recovery? false
                        :bookkeeper/password-bytes (.getBytes "INSECUREDEFAULTPASSWORD")
                        :onyx/max-peers 1
