@@ -124,8 +124,9 @@
     offset)
 
   (recover! [this replica-version checkpoint]
-    (println "RECOVER FROM CHECKPOINT" checkpoint)
+    (info "RECOVER FROM CHECKPOINT" checkpoint)
     (set! drained false)
+    (set! entries nil)
     (set! offset (or checkpoint (:bookkeeper/ledger-start-id task-map)))
     this)
 
