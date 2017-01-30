@@ -295,6 +295,8 @@
     (set! in-flight-writes (atom 0))
     this)
 
+  (checkpoint [this])
+
   (synced? [this epoch]
     (zero? @in-flight-writes)
     true)
