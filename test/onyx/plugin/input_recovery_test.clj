@@ -53,6 +53,9 @@
           peer-config {:zookeeper/address zk-addr
                        :onyx.peer/coordinator-barrier-period-ms 1
                        :onyx.peer/job-scheduler :onyx.job-scheduler/greedy
+                       :onyx.peer/storage :s3
+                       :onyx.peer/storage.s3.bucket "onyx-s3-testing"
+                       :onyx.peer/storage.s3.region "us-west-2"
                        :onyx.messaging/impl :aeron
                        :onyx.messaging/peer-port 40200
                        :onyx.messaging/bind-addr "localhost"
