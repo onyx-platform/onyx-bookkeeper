@@ -1,4 +1,4 @@
-(defproject org.onyxplatform/onyx-bookkeeper "0.9.15.1-SNAPSHOT"
+(defproject org.onyxplatform/onyx-bookkeeper "0.10.0.0-alpha1"
   :description "Onyx plugin for BookKeeper"
   :url "https://github.com/onyx-platform/onyx-bookkeeper"
   :license {:name "Eclipse Public License"
@@ -12,9 +12,20 @@
                              :password :env
                              :sign-releases false}}
   :dependencies [[org.clojure/clojure "1.7.0"]
+                 [org.apache.bookkeeper/bookkeeper-server "4.4.0" :exclusions [org.slf4j/slf4j-log4j12]]
+                 ;[org.apache.bookkeeper/bookkeeper "4.4.0" :exclusions [org.slf4j/slf4j-log4j12]]
                  ^{:voom {:repo "git@github.com:onyx-platform/onyx.git" :branch "master"}}
-                 [org.onyxplatform/onyx "0.9.16-20170115_050011-g67c4c8f"]]
-  :profiles {:dev {:plugins [[lein-set-version "0.4.1"]
+                 [org.onyxplatform/onyx "0.10.0-alpha1"]]
+  :jvm-opts ^:replace ["-Xmx3g"]
+  :profiles {:debug 
+             {:jvm-opts ^:replace ["-server"
+                                   "-Xmx3000M"
+                                   "-XX:+UseG1GC" 
+                                   "-XX:-OmitStackTraceInFastThrow" 
+                                   "-XX:+UnlockCommercialFeatures"
+                                   "-XX:+FlightRecorder"
+                                   "-XX:StartFlightRecording=duration=1080s,filename=recording.jfr"]}
+             :dev {:plugins [[lein-set-version "0.4.1"]
                              [lein-update-dependency "0.1.2"]
                              [lein-pprint "1.1.1"]]}
-             :circle-ci {:jvm-opts ["-Xmx4g"]}})
+             :circle-ci {:jvm-opts ["-Xmx4g" "-server"]}})

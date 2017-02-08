@@ -35,7 +35,6 @@ Catalog entry:
  :bookkeeper/digest-type :mac
  :bookkeeper/deserializer-fn :your-ns/your-deserializer-fn
  :bookkeeper/password-bytes (.getBytes "YOURPASSWORD")
- :checkpoint/force-reset? true
  :onyx/max-peers 1
  :onyx/batch-size batch-size
  :onyx/doc "Reads a sequence of entries from a BookKeeper ledger"}
