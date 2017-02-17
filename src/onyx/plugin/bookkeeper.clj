@@ -301,7 +301,7 @@
     (zero? @in-flight-writes)
     true)
 
-  (prepare-batch [this event replica]
+  (prepare-batch [this event _ _]
     true)
 
   (checkpointed! [this epoch])
