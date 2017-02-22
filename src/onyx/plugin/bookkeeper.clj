@@ -10,9 +10,7 @@
             [onyx.log.curator :as zk]
             [onyx.extensions :as extensions]
             [onyx.protocol.task-state :refer :all]
-            [onyx.plugin.protocols.plugin :as p]
-            [onyx.plugin.protocols.input :as i]
-            [onyx.plugin.protocols.output :as o]
+            [onyx.plugin.protocols :as p]
             [onyx.monitoring.measurements :refer [measure-latency]]
             [onyx.compression.nippy :refer [zookeeper-compress zookeeper-decompress]]
             [onyx.static.uuid :refer [random-uuid]]
@@ -117,22 +115,25 @@
       (.close ledger-handle))
     this)
 
-  i/Input
-  (checkpoint [this]
-    offset)
+  p/BarrierSynchronization
+  (synced? [this epoch]
+    true)
 
+  (completed? [this]
+    drained)
+
+  p/Checkpointed
   (recover! [this replica-version checkpoint]
-    (info "RECOVER FROM CHECKPOINT" checkpoint)
+    (info "Recovered from checkpoint:" checkpoint)
     (set! drained false)
     (set! entries nil)
     (set! offset (or checkpoint (:bookkeeper/ledger-start-id task-map)))
     this)
-
-  (synced? [this epoch]
-    true)
-
+  (checkpoint [this]
+    offset)
   (checkpointed! [this epoch])
 
+  p/Input
   (poll! [this _]
     (cond (and entries (.hasMoreElements entries))
           (let [ledger-entry (.nextElement entries)
@@ -204,10 +205,7 @@
                                                offset
                                                (min (+ chunk-size offset) 
                                                     ledger-end-id)))))
-            nil)))
-
-  (completed? [this]
-    drained))
+            nil))))
 
 (defn read-ledgers [{:keys [onyx.core/task-map onyx.core/log onyx.core/task-id onyx.core/log-prefix] :as pipeline-data}]
   (let [batch-timeout (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout default-vals))
@@ -289,22 +287,23 @@
   (stop [this event] 
     this)
 
-  o/Output
+  p/BarrierSynchronization
+  (synced? [this epoch]
+    (zero? @in-flight-writes))
+  (completed? [this]
+    (zero? @in-flight-writes))
+
+  p/Checkpointed
   (recover! [this _ _]
     ;; need a whole new atom so async writes from before the recover don't alter the counter
     (set! in-flight-writes (atom 0))
     this)
-
   (checkpoint [this])
+  (checkpointed! [this epoch])
 
-  (synced? [this epoch]
-    (zero? @in-flight-writes)
-    true)
-
+  p/Output
   (prepare-batch [this event _ _]
     true)
-
-  (checkpointed! [this epoch])
 
   (write-batch [this {:keys [onyx.core/results]} replica _]
     (when @write-failed-code
