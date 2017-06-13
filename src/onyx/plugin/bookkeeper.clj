@@ -134,7 +134,7 @@
   (checkpointed! [this epoch])
 
   p/Input
-  (poll! [this _]
+  (poll! [this _ _]
     (cond (and entries (.hasMoreElements entries))
           (let [ledger-entry (.nextElement entries)
                 entry-id (.getEntryId ^LedgerEntry ledger-entry)
