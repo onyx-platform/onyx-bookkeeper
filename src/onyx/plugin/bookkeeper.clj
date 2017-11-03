@@ -305,22 +305,20 @@
   (prepare-batch [this event _ _]
     true)
 
-  (write-batch [this {:keys [onyx.core/results]} replica _]
+  (write-batch [this {:keys [onyx.core/write-batch]} replica _]
     (when @write-failed-code
       (throw (ex-info "Write to BookKeeper ledger failed." {:ledger-id (.getId ledger-handle)
                                                             :code @write-failed-code})))
-    (run! (fn [result]
-            (let [failed-reset-fn (fn [code] (reset! write-failed-code code))
-                  callback-data {:ack-fn (fn [] (swap! in-flight-writes dec))
-                                 :failed! failed-reset-fn}] 
-              (run! (fn [leaf]
-                      (swap! in-flight-writes inc)
-                      (.asyncAddEntry ^LedgerHandle ledger-handle 
-                                      ^bytes (serializer-fn leaf)
-                                      HandleWriteCallback
-                                      callback-data))
-                    (:leaves result))))
-          (:tree results))
+    (let [failed-reset-fn (fn [code] (reset! write-failed-code code))
+          callback-data {:ack-fn (fn [] (swap! in-flight-writes dec))
+                         :failed! failed-reset-fn}] 
+      (run! (fn [leaf]
+              (swap! in-flight-writes inc)
+              (.asyncAddEntry ^LedgerHandle ledger-handle 
+                              ^bytes (serializer-fn leaf)
+                              HandleWriteCallback
+                              callback-data))
+            write-batch))
     true))
 
 (defn add-ledger-data! [{:keys [conn] :as log} path ledger-id]
