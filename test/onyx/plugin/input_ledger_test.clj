@@ -42,7 +42,6 @@
                    :onyx.messaging/impl :aeron
                    :onyx.messaging/peer-port 40200
                    :onyx.messaging/bind-addr "localhost"
-                   :onyx.messaging/backpressure-strategy :high-restart-latency
                    :onyx/tenancy-id id}
       batch-size 3]
   (with-test-env [env [3 env-config peer-config]]
