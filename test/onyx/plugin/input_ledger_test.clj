@@ -35,14 +35,18 @@
                   :zookeeper/server? true
                   :zookeeper.server/port 2188
                   :onyx.bookkeeper/server? false
-                  :onyx.bookkeeper/local-quorum? false
+                  :onyx.bookkeeper/local-quorum? true
+                  :onyx.bookkeeper/ledger-ensemble-size 3
+                  :onyx.bookkeeper/ledger-quorum-size 3
+                  :onyx.bookkeeper/ledger-id-written-back-off 50
+                  :onyx.bookkeeper/ledger-password "INSECUREDEFAULTPASSWORD"
+                  :onyx.bookkeeper/client-throttle 30000
                   :onyx/tenancy-id id}
       peer-config {:zookeeper/address zk-addr
                    :onyx.peer/job-scheduler :onyx.job-scheduler/greedy
                    :onyx.messaging/impl :aeron
                    :onyx.messaging/peer-port 40200
                    :onyx.messaging/bind-addr "localhost"
-                   :onyx.messaging/backpressure-strategy :high-restart-latency
                    :onyx/tenancy-id id}
       batch-size 3]
   (with-test-env [env [3 env-config peer-config]]

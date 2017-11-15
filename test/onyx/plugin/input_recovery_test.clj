@@ -47,15 +47,19 @@
           env-config {:zookeeper/address zk-addr
                       :zookeeper/server? true
                       :zookeeper.server/port 2188
-                      :onyx.bookkeeper/server? false
-                      :onyx.bookkeeper/local-quorum? false
+                      :onyx.bookkeeper/ledger-ensemble-size 3
+                      :onyx.bookkeeper/ledger-quorum-size 3
+                      :onyx.bookkeeper/ledger-id-written-back-off 50
+                      :onyx.bookkeeper/ledger-password "INSECUREDEFAULTPASSWORD"
+                      :onyx.bookkeeper/client-throttle 30000
+                      :onyx.bookkeeper/server? true 
+                      :onyx.bookkeeper/delete-server-data? true
+                      :onyx.bookkeeper/local-quorum? true
                       :onyx/tenancy-id id}
           peer-config {:zookeeper/address zk-addr
                        :onyx.peer/coordinator-barrier-period-ms 1
                        :onyx.peer/job-scheduler :onyx.job-scheduler/greedy
-                       :onyx.peer/storage :s3
-                       :onyx.peer/storage.s3.bucket "onyx-s3-testing"
-                       :onyx.peer/storage.s3.region "us-west-2"
+                       :onyx.peer/storage.zk.insanely-allow-windowing? true
                        :onyx.messaging/impl :aeron
                        :onyx.messaging/peer-port 40200
                        :onyx.messaging/bind-addr "localhost"
@@ -65,11 +69,7 @@
       (with-test-env [env [3 env-config peer-config]]
         (let [_ (reset! out-chan (chan 50000))
               log (:log (:env env))
-              bk-config (assoc env-config 
-                               :onyx.bookkeeper/server? true 
-                               :onyx.bookkeeper/delete-server-data? true
-                               :onyx.bookkeeper/local-quorum? true)
-              multi-bookie-server (component/start (bkserver/multi-bookie-server bk-config log))] 
+              multi-bookie-server (component/start (bkserver/multi-bookie-server env-config log))] 
           (try 
            (let [ledgers-root-path "/ledgers"
                  client (bookkeeper zk-addr ledgers-root-path 60000 30000)
