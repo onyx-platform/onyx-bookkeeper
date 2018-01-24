@@ -15,7 +15,7 @@
                  [org.apache.bookkeeper/bookkeeper-server "4.4.0" :exclusions [org.slf4j/slf4j-log4j12]]
                  ;[org.apache.bookkeeper/bookkeeper "4.4.0" :exclusions [org.slf4j/slf4j-log4j12]]
                  ^{:voom {:repo "git@github.com:onyx-platform/onyx.git" :branch "master"}}
-                 [org.onyxplatform/onyx "0.12.6-20180123_073016-ge2c077b"]]
+                 [org.onyxplatform/onyx "0.12.6-20180124_183449-gb12ac44"]]
   :jvm-opts ^:replace ["-Xmx3g"]
   :profiles {:debug 
              {:jvm-opts ^:replace ["-server"
