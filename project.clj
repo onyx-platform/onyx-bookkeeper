@@ -1,4 +1,4 @@
-(defproject org.onyxplatform/onyx-bookkeeper "0.13.0.0-alpha1"
+(defproject org.onyxplatform/onyx-bookkeeper "0.13.0.0-SNAPSHOT"
   :description "Onyx plugin for BookKeeper"
   :url "https://github.com/onyx-platform/onyx-bookkeeper"
   :license {:name "Eclipse Public License"
