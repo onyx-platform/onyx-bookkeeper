@@ -150,21 +150,21 @@
 
           :else
           (let [no-recovery? (:bookkeeper/no-recovery? task-map)
+                ledger-id (:bookkeeper/ledger-id task-map)
                 _ (when-not ledger-handle
-                    ;; FIXME
-                    (let [f (if (and no-recovery? (not (.isClosed client (:bookkeeper/ledger-id task-map)))) 
-                              open-ledger-no-recovery 
-                              open-ledger)] 
+                    (let [open-f (if (and no-recovery? (not (.isClosed client ledger-id))) 
+                                   open-ledger-no-recovery 
+                                   open-ledger)] 
                       (set! ledger-handle
-                            (f client 
-                               (:bookkeeper/ledger-id task-map) 
-                               digest 
-                               (:bookkeeper/password-bytes task-map)))))
+                            (open-f client 
+                                    ledger-id
+                                    digest 
+                                    (:bookkeeper/password-bytes task-map)))))
                 chunk-size (:bookkeeper/read-max-chunk-size task-map)
                 chunk-size 1
                 ;; too many isClosed checks
                 ;; should only check is closed when we have done an empty read
-                ledger-closed? (.isClosed client (:bookkeeper/ledger-id task-map))
+                ledger-closed? (.isClosed client ledger-id)
                 last-confirmed (if no-recovery? 
                                  (.readLastConfirmed ledger-handle)
                                  (.getLastAddConfirmed ledger-handle))
