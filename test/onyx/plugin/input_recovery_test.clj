@@ -78,6 +78,7 @@
                  start (rand-int 100)
                  end (+ start (rand-int 50))
                  n-entries (inc end)
+                 max-read-chunk-size (inc (rand-int 100))
                  catalog [{:onyx/name :read-ledgers
                            :onyx/plugin :onyx.plugin.bookkeeper/read-ledgers
                            :onyx/type :input
@@ -89,7 +90,7 @@
                            :bookkeeper/deserializer-fn :onyx.compression.nippy/zookeeper-decompress
                            :bookkeeper/ledger-start-id start
                            :bookkeeper/ledger-end-id end
-                           :bookkeeper/read-max-chunk-size (inc (rand-int 100))
+                           :bookkeeper/read-max-chunk-size max-read-chunk-size
                            :bookkeeper/no-recovery? true
                            :bookkeeper/password-bytes (.getBytes "INSECUREDEFAULTPASSWORD")
                            :onyx/max-peers 1
@@ -125,6 +126,7 @@
                  entries (mapv (fn [v]
                                  {:value v :random (rand-int 10)})
                                (range n-entries))
+                 _ (println "Max read size" max-read-chunk-size)
                  ;; write start
                  _ (doseq [v (take 10 entries)]
                      (.addEntry ledger-handle (nippy/zookeeper-compress v)))
